@@ -21,5 +21,7 @@ test("server-renders the Taiwu planner", async () => {
   assert.match(html, /구색옥선법/);
   assert.match(html, /운공 배치/);
   assert.match(html, /만능공법칸/);
+  assert.match(html, /데이터 업로드/);
+  assert.match(html, /공략 게시판/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton/i);
 });

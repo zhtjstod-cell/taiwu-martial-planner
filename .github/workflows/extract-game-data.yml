@@ -7,8 +7,8 @@ on:
     inputs:
       game_directory:
         description: "Self-hosted Windows runner의 태오 설치 경로"
-        required: true
-        default: "H:\\SteamLibrary\\steamapps\\common\\The Scroll Of Taiwu"
+        required: false
+        default: ""
 
 jobs:
   extract:
@@ -38,14 +38,14 @@ jobs:
           }
       - name: Extract current game data
         env:
-          TAIWU_GAME_DIR: ${{ inputs.game_directory || vars.TAIWU_GAME_DIR || 'H:\SteamLibrary\steamapps\common\The Scroll Of Taiwu' }}
+          TAIWU_GAME_DIR: ${{ inputs.game_directory || vars.TAIWU_GAME_DIR }}
           ILSPYCMD: ilspycmd
         run: node extractor/extract.mjs
       - name: Extract current in-game UI art
         shell: powershell
         run: python extractor/extract-ui-assets.py --game "$env:TAIWU_GAME_DIR" --out public/game-ui
         env:
-          TAIWU_GAME_DIR: ${{ inputs.game_directory || vars.TAIWU_GAME_DIR || 'H:\SteamLibrary\steamapps\common\The Scroll Of Taiwu' }}
+          TAIWU_GAME_DIR: ${{ inputs.game_directory || vars.TAIWU_GAME_DIR }}
       - name: Commit changed dataset
         shell: powershell
         run: |

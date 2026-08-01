@@ -15,10 +15,14 @@
 
 ```powershell
 npm install
-npm run extract -- --game "H:\SteamLibrary\steamapps\common\The Scroll Of Taiwu"
+npm run extract -- --game "D:\SteamLibrary\steamapps\common\The Scroll Of Taiwu" --portable ".\태오회권_무공데이터.json"
 npm run extract:ui
 npm run dev
 ```
+
+일반 사용자는 GitHub Releases의 `태오회권_무공추출기` ZIP을 풀고 `태오회권_무공추출기.bat`을 실행하면 됩니다. Steam 설치 폴더를 자동 탐색하며, 생성된 `output\태오회권_무공데이터.json`에는 사이트에서 필요한 실제 인게임 공법 아이콘도 함께 들어갑니다. 사이트 상단 `데이터 업로드`에서 파일을 고르면 스키마·중복 ID·운공칸을 검증한 뒤 해당 브라우저에 즉시 적용하고 IndexedDB에 보존합니다. 임의 사용자가 공용 기본 데이터를 바꾸지는 못합니다.
+
+추출 버전은 게임 버전, Steam 빌드 ID, 한국어 로컬라이징 모드와 그 버전을 함께 기록합니다. 기본 `Language_KO`를 읽은 뒤 설치된 한국어 로컬라이징 모드를 덮어써 실제 플레이 화면의 명칭을 우선합니다.
 
 ILSpy CLI는 `--ilspy` 또는 `ILSPYCMD`로 지정할 수 있습니다. 로컬에 없으면 `dotnet tool run ilspycmd`를 사용합니다.
 
@@ -43,6 +47,10 @@ ILSpy CLI는 `--ilspy` 또는 `ILSPYCMD`로 지정할 수 있습니다. 로컬�
 ## GitHub 자동 갱신
 
 `.github/workflows/extract-game-data.yml`은 게임이 설치된 self-hosted Windows runner에서 수동 또는 매일 실행합니다. 새 데이터나 운공 UI 에셋에 변화가 있을 때만 추출 결과를 커밋합니다. 게임 전체 파일은 저장소에 올리지 않습니다.
+
+## 공략 게시판과 개인정보
+
+공략은 자유 서술 없이 제목과 현재 운공 조합, 추출 데이터 버전만 저장합니다. 추천은 Cloudflare가 전달한 IP를 서버 비밀키와 함께 SHA-256으로 변환한 값으로만 중복을 판단하며 IP 원문은 저장하지 않습니다. 같은 IP는 같은 공략에 한 번만 추천할 수 있고, 등록은 IP당 1분에 한 번으로 제한합니다. 게시판은 Sites의 서버리스 D1을 사용하므로 개발자가 별도 서버를 계속 실행할 필요가 없습니다.
 
 ## 검증
 

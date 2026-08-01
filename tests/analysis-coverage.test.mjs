@@ -32,7 +32,7 @@ test("every described effect retains a dynamic mechanic axis", () => {
 
 test("every effect receives inherited code logic instead of one-off exceptions", () => {
   const effects = data.skills.flatMap((skill) => [skill.direct, skill.reverse]);
-  assert.equal(data.meta.schemaVersion, 3);
+  assert.equal(data.meta.schemaVersion, 4);
   assert.ok(data.meta.analysisStats.codeLogicOperationCount > 8000);
   assert.ok(data.meta.analysisStats.codeLogicConditionCount > 4000);
   assert.ok(effects.every((effect) => {
@@ -42,6 +42,9 @@ test("every effect receives inherited code logic instead of one-off exceptions",
 });
 
 test("official Korean names and mastery slot trade-offs come from game data", () => {
+  assert.equal(data.skills.find((skill) => skill.id === 0).name, "패연결");
+  assert.ok(data.skills.every((skill) => skill.grade === 9 - skill.gradeIndex));
+  assert.equal(data.skills.find((skill) => skill.gradeIndex === 8).grade, 1);
   assert.deepEqual([...new Set(data.skills.map((skill) => skill.equipName))].sort(), ["경령", "기교", "내공", "파괴", "호체"]);
   assert.equal(data.skills.find((skill) => skill.id === 1).typeName, "신법");
   assert.equal(data.skills.find((skill) => skill.sect === 5).sectName, "원산파");
@@ -89,12 +92,15 @@ test("tooltip-omitted old-injury behavior remains one automatically detected cas
   assert.ok(jiuSe.reverse.tags.includes("현재부상만"));
   assert.equal(jiuSe.codeVerified, true);
   assert.ok(jiuSe.direct.analysis.logic.operations.some((operation) => operation.symbol === "Subtract" && operation.resources.includes("오래된 부상")));
+  const counters = jiuSe.relations.direct.counter;
+  assert.ok(counters.some((relation) => relation.basis === "old-injury-bypass"));
+  assert.ok(counters.some((relation) => relation.basis === "requirement-denial" && [52, 559].includes(relation.skillId) && relation.resource === "기교 진기"));
 });
 
 test("weapon range and trick requirements are joined to martial arts", () => {
   const daLiKaiBeiZhang = data.skills.find((skill) => skill.id === 356);
   assert.equal(daLiKaiBeiZhang.combat.recommendedWeaponName, "완철장투");
-  assert.deepEqual(daLiKaiBeiZhang.combat.trickCost, [{ trickId: 6, name: "튕기기", nameCn: "崩", count: 3 }]);
+  assert.deepEqual(daLiKaiBeiZhang.combat.trickCost, [{ trickId: 6, name: "붕", nameCn: "崩", count: 3 }]);
   assert.equal(daLiKaiBeiZhang.combat.minDistance, 20);
   assert.equal(daLiKaiBeiZhang.combat.maxDistance, 60);
   assert.ok(daLiKaiBeiZhang.combat.compatibleWeaponGroups.length > 0);

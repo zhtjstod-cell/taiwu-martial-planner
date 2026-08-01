@@ -26,6 +26,7 @@ ATLAS_FILTERS = {
     ),
     "atlas_combatskilltypeicon.uab": ("GongFaIcon_",),
     "atlas_combatskillicon.uab": ("sp_combatskillback_",),
+    "atlas_combatskilliconlegacy.uab": ("sp_icon_combatskill_",),
 }
 
 TEXTURE_NAMES = {

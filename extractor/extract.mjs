@@ -14,11 +14,10 @@ const valueOf = (name, fallback) => {
 };
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const defaultGame = process.platform === "win32"
-  ? "H:\\SteamLibrary\\steamapps\\common\\The Scroll Of Taiwu"
-  : "";
+const defaultGame = "";
 const gameRoot = resolve(valueOf("--game", process.env.TAIWU_GAME_DIR || defaultGame));
 const outputFile = resolve(valueOf("--out", join(projectRoot, "app", "data", "combat-skills.json")));
+const portableFile = valueOf("--portable", "");
 const cacheRoot = resolve(valueOf("--cache", join(projectRoot, "extractor", ".cache")));
 const withCode = !argv.includes("--no-code");
 
@@ -87,6 +86,42 @@ function readPairs(path) {
   for (let index = 0; index + 1 < lines.length; index += 2) data.set(lines[index], lines[index + 1]);
   return data;
 }
+
+function mergePairs(basePath, overlayPaths = []) {
+  const result = readPairs(basePath);
+  for (const overlayPath of overlayPaths) {
+    if (!existsSync(overlayPath)) continue;
+    for (const [key, value] of readPairs(overlayPath)) result.set(key, value);
+  }
+  return result;
+}
+
+function luaValue(source, key) {
+  return source.match(new RegExp(`(?:^|\\n)\\s*${key}\\s*=\\s*["']([^"']+)["']`))?.[1] || "";
+}
+
+const localModRoot = join(gameRoot, "Mod");
+const localizationMods = existsSync(localModRoot)
+  ? readdirSync(localModRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => {
+      const root = join(localModRoot, entry.name);
+      const language = join(root, "Localization", "Language_KO");
+      const configPath = join(root, "Config.lua");
+      if (!existsSync(language)) return null;
+      const config = existsSync(configPath) ? readFileSync(configPath, "utf8") : "";
+      return { name: entry.name, language, version: luaValue(config, "Version"), gameVersion: luaValue(config, "GameVersion") };
+    })
+    .filter(Boolean)
+  : [];
+const overlayFiles = (fileName) => localizationMods.map((mod) => join(mod.language, fileName)).filter(existsSync);
+
+const appManifestPath = resolve(gameRoot, "..", "..", "appmanifest_838350.acf");
+const appManifest = existsSync(appManifestPath) ? readFileSync(appManifestPath, "utf8") : "";
+const steamBuildId = appManifest.match(/"buildid"\s+"(\d+)"/)?.[1] || "unknown";
+const gameVersion = localizationMods.find((mod) => mod.gameVersion)?.gameVersion || "unknown";
+const versionSuffix = localizationMods.map((mod) => `${mod.name}${mod.version ? `-${mod.version}` : ""}`).join("+");
+const datasetVersion = `${gameVersion}-steam${steamBuildId}${versionSuffix ? `-${versionSuffix}` : ""}`;
 
 function unquote(value) {
   const trimmed = value.trim();
@@ -166,20 +201,20 @@ const combatSkillHelperSource = decompileType("GameData.Domains.Character.Combat
 const globalConfigSource = decompileType("GlobalConfig");
 const equipUiSource = decompileClientType("UI_CharacterMenuEquipCombatSkill");
 const codeRoot = withCode ? decompileCode() : null;
-const combatKo = readPairs(join(languageKo, "CombatSkill_language.txt"));
+const combatKo = mergePairs(join(languageKo, "CombatSkill_language.txt"), overlayFiles("CombatSkill_language.txt"));
 const combatCn = readPairs(join(languageCn, "CombatSkill_language.txt"));
-const effectKo = readPairs(join(languageKo, "SpecialEffect_language.txt"));
+const effectKo = mergePairs(join(languageKo, "SpecialEffect_language.txt"), overlayFiles("SpecialEffect_language.txt"));
 const effectCn = readPairs(join(languageCn, "SpecialEffect_language.txt"));
-const weaponKo = readPairs(join(languageKo, "Weapon_language.txt"));
+const weaponKo = mergePairs(join(languageKo, "Weapon_language.txt"), overlayFiles("Weapon_language.txt"));
 const weaponCn = readPairs(join(languageCn, "Weapon_language.txt"));
-const trickKo = readPairs(join(languageKo, "TrickType_language.txt"));
+const trickKo = mergePairs(join(languageKo, "TrickType_language.txt"), overlayFiles("TrickType_language.txt"));
 const trickCn = readPairs(join(languageCn, "TrickType_language.txt"));
-const dataFieldKo = readPairs(join(languageKo, "SpecialEffectDataField_language.txt"));
+const dataFieldKo = mergePairs(join(languageKo, "SpecialEffectDataField_language.txt"), overlayFiles("SpecialEffectDataField_language.txt"));
 const dataFieldCn = readPairs(join(languageCn, "SpecialEffectDataField_language.txt"));
-const combatSkillTypeKo = readPairs(join(languageKo, "CombatSkillType_language.txt"));
-const organizationKo = readPairs(join(languageKo, "Organization_language.txt"));
+const combatSkillTypeKo = mergePairs(join(languageKo, "CombatSkillType_language.txt"), overlayFiles("CombatSkillType_language.txt"));
+const organizationKo = mergePairs(join(languageKo, "Organization_language.txt"), overlayFiles("Organization_language.txt"));
 const organizationCn = readPairs(join(languageCn, "Organization_language.txt"));
-const uiKo = readPairs(join(languageKo, "ui_language.txt"));
+const uiKo = mergePairs(join(languageKo, "ui_language.txt"), overlayFiles("ui_language.txt"));
 
 const effectRows = new Map();
 for (const call of extractCalls(effectSource, "SpecialEffectItem")) {
@@ -716,7 +751,8 @@ for (const call of extractCalls(combatSource, "CombatSkillItem")) {
     name: combatKo.get(`Name_${id}`) || combatCn.get(`Name_${id}`) || `무공 ${id}`,
     nameCn: combatCn.get(`Name_${id}`) || "",
     lore: combatKo.get(`Desc_${id}`) || "",
-    grade: readInteger(args[2], 0) + 1,
+    gradeIndex: readInteger(args[2], 0),
+    grade: 9 - readInteger(args[2], 0),
     icon: unquote(args[4]),
     equipType,
     equipName: equipNames[equipType] || "기타",
@@ -947,7 +983,17 @@ function buildRelations(selected, selectedMode, evaluator, minimumScore) {
     }
     if (best) relations.push(best);
   }
-  return relations.sort((a, b) => b.score - a.score || a.skillId - b.skillId).slice(0, 8);
+  const sorted = relations.sort((a, b) => b.score - a.score || a.skillId - b.skillId);
+  const perBasis = new Map();
+  const diversified = [];
+  for (const relation of sorted) {
+    const count = perBasis.get(relation.basis) || 0;
+    if (count >= 4) continue;
+    perBasis.set(relation.basis, count + 1);
+    diversified.push(relation);
+    if (diversified.length >= 20) break;
+  }
+  return diversified;
 }
 
 for (const skill of skills) {
@@ -971,13 +1017,17 @@ relationAudit.rejectedOpponentHealingEdges = allAnalyses.reduce((sum, analysis) 
 ).length, 0);
 const countUnique = (field) => new Set(allAnalyses.flatMap((analysis) => analysis[field])).size;
 const digest = createHash("sha256");
-for (const path of [sharedDll, gameDll, clientDll, join(languageKo, "CombatSkill_language.txt"), join(languageKo, "SpecialEffect_language.txt")]) {
+for (const path of [sharedDll, gameDll, clientDll, join(languageKo, "CombatSkill_language.txt"), join(languageKo, "SpecialEffect_language.txt"), ...overlayFiles("CombatSkill_language.txt"), ...overlayFiles("SpecialEffect_language.txt")]) {
   digest.update(readFileSync(path));
 }
 
 const payload = {
   meta: {
-    schemaVersion: 3,
+    schemaVersion: 4,
+    datasetVersion,
+    gameVersion,
+    steamBuildId,
+    localizationMods: localizationMods.map(({ name, version }) => ({ name, version })),
     extractedAt: new Date().toISOString(),
     sourceHash: digest.digest("hex"),
     gameRootName: basename(gameRoot),
@@ -1017,5 +1067,11 @@ writeFileSync(outputFile, `${JSON.stringify(manifest)}\n`, "utf8");
 for (let shardIndex = 0; shardIndex < shardCount; shardIndex += 1) {
   const shard = skills.slice(shardIndex * shardSize, (shardIndex + 1) * shardSize);
   writeFileSync(`${outputStem}-${shardIndex}.json`, `${JSON.stringify(shard)}\n`, "utf8");
+}
+if (portableFile) {
+  const portableOutput = resolve(portableFile);
+  mkdirSync(dirname(portableOutput), { recursive: true });
+  writeFileSync(portableOutput, `${JSON.stringify(payload)}\n`, "utf8");
+  console.log(`업로드용 데이터: ${portableOutput}`);
 }
 console.log(`추출 완료: ${skills.length}개 무공 -> ${outputFile}`);
