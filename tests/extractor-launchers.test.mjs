@@ -70,7 +70,10 @@ test("portable release workflow builds native runtime bundles on both operating 
   assert.match(workflow, /ubuntu-22\.04/);
   assert.match(workflow, /node-version: 22\.13\.1/);
   assert.match(workflow, /PyInstaller/);
+  assert.match(workflow, /pyinstaller==6\.19\.0/);
   assert.doesNotMatch(workflow, /--collect-all (?:UnityPy|PIL)/);
+  assert.match(workflow, /--collect-data UnityPy/);
+  assert.match(workflow, /--hidden-import UnityPy\.resources/);
   assert.match(workflow, /--hidden-import UnityPy\.export\.SpriteHelper/);
   assert.match(workflow, /--exclude-module fmod_toolkit/);
   assert.match(workflow, /dotnet-install/);
