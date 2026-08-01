@@ -50,6 +50,7 @@ test("Cloudflare Pages staging is static, small, and privacy-safe", async () => 
   assert.match(worker, /relation_reports/);
   assert.match(worker, /cf-connecting-ip/);
   assert.doesNotMatch(worker, /VOTE_HMAC_SECRET\s*[:=]\s*["'][^"']+["']/);
+  await assert.rejects(stat(new URL("../.wrangler/deploy/config.json", import.meta.url)), { code: "ENOENT" });
 });
 
 test("Pages relation-report API validates evidence and stores only HMAC-scoped metadata", async () => {

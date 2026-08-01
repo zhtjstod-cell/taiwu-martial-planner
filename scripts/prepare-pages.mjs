@@ -10,6 +10,7 @@ const client = resolve(root, "dist", "client");
 const server = resolve(root, "dist", "server");
 const output = resolve(root, ".pages-deploy");
 const pagesWorker = resolve(root, "cloudflare", "pages-worker.ts");
+const vinextDeployRedirect = resolve(root, ".wrangler", "deploy", "config.json");
 
 if (!output.startsWith(`${root}\\`) && !output.startsWith(`${root}/`)) {
   throw new Error("Pages staging path escaped the project root.");
@@ -35,5 +36,10 @@ await build({
   minify: true,
   target: "es2022",
 });
+
+// vinext writes a redirect for its SSR Worker build. This project deploys the
+// dedicated Pages Worker above, so leaving that redirect makes Wrangler merge
+// the D1 binding twice and abort before uploading anything.
+await rm(vinextDeployRedirect, { force: true });
 
 console.log(`Cloudflare Pages staging ready: ${output}`);
