@@ -38,6 +38,14 @@ type Analysis = {
   codeSignals: string[];
   affectedFields: string[];
   affectedFieldIds: number[];
+  logic: {
+    primaryDepth: number;
+    events: { name: string; label: string; owner: string; depth: number }[];
+    conditions: { expression: string; resources: string[]; states: string[]; target: string; polarity: string; owner: string; depth: number }[];
+    operations: { symbol: string; verb: string; resources: string[]; target: string; values: string[]; evidence: string; owner: string; depth: number }[];
+    affectedFields: string[];
+    coverage: { eventCount: number; conditionCount: number; operationCount: number; symbolCount: number };
+  };
 };
 type Effect = { effectId: number; name: string; short: string[]; description: string; tags: string[]; analysis: Analysis };
 type Skill = {
@@ -79,8 +87,10 @@ type Relation = { skill: Skill; mode: Mode; score: number; reason: string };
 
 const skills = rawData.skills as Skill[];
 const meta = rawData.meta;
-const categoryNames = ["내공", "최파", "경공", "호체", "기규"];
+const uiProfile = rawData.ui as { maxSlotCounts: number[]; totalSlotCount: number; slotVisualSize: { width: number; height: number }; supportsGenericGridAllocation: boolean; supportsMultiplePlans: boolean };
+const categoryNames = ["내공", "최파", "경령", "호체", "기규"];
 const categoryGlyphs = ["內", "破", "輕", "護", "奇"];
+const logicVerbNames: Record<string, string> = { produces: "생성", consumes: "소모", clears: "제거", amplifies: "증폭", reduces: "감소", prevents: "차단", modifies: "변경", filters: "대상에서 제외" };
 const weightedTags: Record<string, number> = {
   자동발동: 8,
   전진: 5,
@@ -120,7 +130,8 @@ function synergyScore(selected: Effect, candidate: Effect) {
   const sharedFields = overlap(a.affectedFields, b.affectedFields);
   const score = (feedsCandidate.length + feedsSelected.length) * 18 + sharedAxes.length * 9 + sharedTriggers.length * 4 + sharedConcepts.length * 2 + Math.min(sharedEvents.length, 3) + sharedFields.length * 3;
   let reason = "";
-  if (feedsCandidate[0]) reason = `선택 무공이 만드는 「${feedsCandidate[0]}」을 발동·증폭 자원으로 사용`;
+  const codeFeed = selected.analysis.logic.operations.find((operation) => operation.resources.includes(feedsCandidate[0]));
+  if (feedsCandidate[0]) reason = codeFeed ? `코드의 ${codeFeed.symbol} 판정이 만드는 「${feedsCandidate[0]}」을 발동·증폭 자원으로 사용` : `선택 무공이 만드는 「${feedsCandidate[0]}」을 발동·증폭 자원으로 사용`;
   else if (feedsSelected[0]) reason = `「${feedsSelected[0]}」을 공급해 선택 무공의 조건을 완성`;
   else if (sharedAxes[0]) reason = `같은 특효 축을 서로 다른 발동 시점에서 중첩`;
   else if (sharedTriggers[0]) reason = `「${sharedTriggers[0]}」 타이밍을 공유해 한 행동으로 함께 발동`;
@@ -270,17 +281,26 @@ export default function Planner() {
   const [selectedId, setSelectedId] = useState(287);
   const [mode, setMode] = useState<Mode>("direct");
   const [analysisTab, setAnalysisTab] = useState<"synergy" | "counter">("synergy");
-  const [equipped, setEquipped] = useState<Equipped[]>([{ skillId: 287, mode: "direct" }]);
+  const [activePlan, setActivePlan] = useState(0);
+  const [plans, setPlans] = useState<Equipped[][]>([[{ skillId: 287, mode: "direct" }], [], []]);
   const [storageReady, setStorageReady] = useState(false);
+  const equipped = plans[activePlan] || [];
+  const updateEquipped = (update: Equipped[] | ((current: Equipped[]) => Equipped[])) => {
+    setPlans((currentPlans) => currentPlans.map((plan, index) => index === activePlan ? (typeof update === "function" ? update(plan) : update) : plan));
+  };
   const selected = skills.find((skill) => skill.id === selectedId) || skills[0];
   const activeEffect = effectFor(selected, mode);
   const displayFacets = [...new Set([...activeEffect.analysis.mechanicLabels, ...activeEffect.analysis.triggers, ...activeEffect.analysis.concepts, ...activeEffect.analysis.affectedFields, ...activeEffect.tags])].slice(0, 14);
+  const logicEvents = [...new Set(activeEffect.analysis.logic.events.map((event) => event.label))].slice(0, 3);
+  const logicConditions = activeEffect.analysis.logic.conditions.filter((condition) => condition.resources.length || condition.states.length).slice(0, 3);
+  const logicOperations = activeEffect.analysis.logic.operations.filter((operation) => operation.resources.some((resource) => resource !== "전투 상태")).slice(0, 5);
 
   useEffect(() => {
     const task = window.setTimeout(() => {
-      const saved = window.localStorage.getItem("taiwu-martial-loadout-v1");
-      if (saved) {
-        try { setEquipped(JSON.parse(saved)); } catch { /* keep the verified sample */ }
+      const savedPlans = window.localStorage.getItem("taiwu-martial-loadout-v2");
+      const savedLegacy = window.localStorage.getItem("taiwu-martial-loadout-v1");
+      if (savedPlans || savedLegacy) {
+        try { setPlans(savedPlans ? JSON.parse(savedPlans) : [JSON.parse(savedLegacy!), [], []]); } catch { /* keep the verified sample */ }
       }
       setStorageReady(true);
     }, 0);
@@ -288,8 +308,8 @@ export default function Planner() {
   }, []);
 
   useEffect(() => {
-    if (storageReady) window.localStorage.setItem("taiwu-martial-loadout-v1", JSON.stringify(equipped));
-  }, [equipped, storageReady]);
+    if (storageReady) window.localStorage.setItem("taiwu-martial-loadout-v2", JSON.stringify(plans));
+  }, [plans, storageReady]);
 
   const filtered = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase("ko");
@@ -306,12 +326,13 @@ export default function Planner() {
 
   const addSelected = () => {
     if (equipped.some((entry) => entry.skillId === selected.id)) {
-      setEquipped((current) => current.map((entry) => entry.skillId === selected.id ? { ...entry, mode } : entry));
+      updateEquipped((current) => current.map((entry) => entry.skillId === selected.id ? { ...entry, mode } : entry));
       return;
     }
     const used = equipped.filter((entry) => skills.find((skill) => skill.id === entry.skillId)?.equipType === selected.equipType)
       .reduce((sum, entry) => sum + (skills.find((skill) => skill.id === entry.skillId)?.gridCost || 0), 0);
-    if (used + selected.gridCost <= 9) setEquipped((current) => [...current, { skillId: selected.id, mode }]);
+    const capacity = uiProfile.maxSlotCounts[selected.equipType] || 9;
+    if (used + selected.gridCost <= capacity) updateEquipped((current) => [...current, { skillId: selected.id, mode }]);
   };
 
   const selectRelation = (relation: Relation) => {
@@ -329,9 +350,9 @@ export default function Planner() {
         </div>
         <div className="topbar-stats">
           <span><Database size={14} /> 게임 추출 {meta.skillCount}식</span>
-          <span><GitCompareArrows size={14} /> 동적 축 {meta.analysisStats.mechanicAxisCount}</span>
+          <span><GitCompareArrows size={14} /> 코드 관계식 {meta.analysisStats.codeLogicOperationCount}</span>
           <span className="verified"><ShieldCheck size={14} /> 코드 검증</span>
-          <button className="icon-button" title="운공판 초기화" aria-label="운공판 초기화" onClick={() => setEquipped([])}><RotateCcw size={17} /></button>
+          <button className="icon-button" title="현재 운공안 초기화" aria-label="현재 운공안 초기화" onClick={() => updateEquipped([])}><RotateCcw size={17} /></button>
           <button className="icon-button" title="플래너 도움말" aria-label="플래너 도움말"><CircleHelp size={18} /></button>
         </div>
       </header>
@@ -366,43 +387,56 @@ export default function Planner() {
 
         <section className="board-panel panel">
           <div className="board-heading">
-            <div><span className="eyebrow">운공 배치</span><h2>운공판</h2></div>
+            <div><span className="eyebrow">정식 출시 장착 구조</span><h2>운공 조정</h2></div>
             <div className="legend"><i className="direct-dot" /> 정련 <i className="reverse-dot" /> 역련</div>
           </div>
-          <div className="qi-disc">
-            <span className="disc-ring ring-one" /><span className="disc-ring ring-two" />
-            <div className="disc-center"><b>運</b><small>운공 총람</small></div>
-            {["금", "목", "수", "화", "토"].map((element, index) => <span key={element} className={`element-node node-${index}`}>{element}</span>)}
+          <div className="game-board-toolbar">
+            <span className="toolbar-label">운공안</span>
+            <div className="plan-tabs" role="tablist" aria-label="운공안 선택">
+              {[0, 1, 2].map((plan) => <button key={plan} className={activePlan === plan ? "active" : ""} onClick={() => setActivePlan(plan)}>{plan + 1}</button>)}
+            </div>
+            <span className="generic-grid-note"><b>{uiProfile.totalSlotCount}</b> 기본 장착칸 · 공용칸 재분배 지원</span>
           </div>
-
-          <div className="loadout-board">
-            {categoryNames.map((name, equipType) => {
-              const entries = equipped.filter((entry) => skills.find((skill) => skill.id === entry.skillId)?.equipType === equipType);
-              const used = entries.reduce((sum, entry) => sum + (skills.find((skill) => skill.id === entry.skillId)?.gridCost || 0), 0);
-              return (
-                <div className="loadout-lane" key={name}>
-                  <div className="lane-label"><span>{categoryGlyphs[equipType]}</span><strong>{name}</strong><small>{used}/9</small></div>
-                  <div className="lane-grid">
-                    {Array.from({ length: 9 }, (_, index) => <span key={index} className="grid-cell" />)}
-                    <div className="equipped-cards">
-                      {entries.map((entry) => {
-                        const skill = skills.find((item) => item.id === entry.skillId)!;
-                        return (
-                          <button key={skill.id} style={{ "--span": skill.gridCost } as React.CSSProperties} className={`equipped-card ${entry.mode}`} onClick={() => { setSelectedId(skill.id); setMode(entry.mode); }}>
-                            <SkillSeal skill={skill} small />
-                            <span><strong>{skill.name}</strong><small>{entry.mode === "direct" ? "정련" : "역련"} · {skill.gridCost}칸</small></span>
-                            <span className="remove-skill" role="button" aria-label={`${skill.name} 제거`} onClick={(event) => { event.stopPropagation(); setEquipped((current) => current.filter((item) => item.skillId !== skill.id)); }}><Minus size={12} /></span>
-                          </button>
-                        );
-                      })}
-                      {used < 9 && <span className="empty-hint"><Plus size={14} /> {9 - used}칸</span>}
+          <div className="cultivation-layout">
+            <div className="practitioner-core" aria-hidden="true">
+              {categoryNames.map((name, index) => <span key={name} className={`meridian-line line-${index}`} />)}
+              <span className="core-ring ring-outer" /><span className="core-ring ring-inner" />
+              <div className="meditation-mark"><span className="head" /><span className="body" /><b>運</b><small>기맥 운행</small></div>
+              <div className="core-elements">{["金", "木", "水", "火", "土"].map((element) => <i key={element}>{element}</i>)}</div>
+            </div>
+            <div className="loadout-board">
+              {categoryNames.map((name, equipType) => {
+                const entries = equipped.filter((entry) => skills.find((skill) => skill.id === entry.skillId)?.equipType === equipType);
+                const used = entries.reduce((sum, entry) => sum + (skills.find((skill) => skill.id === entry.skillId)?.gridCost || 0), 0);
+                const capacity = uiProfile.maxSlotCounts[equipType] || 9;
+                return (
+                  <div className={`loadout-lane lane-${equipType}`} style={{ "--capacity": capacity } as React.CSSProperties} key={name}>
+                    <div className="lane-energy">
+                      <div className="qi-orb"><b>{categoryGlyphs[equipType]}</b><small>{used}/{capacity}</small></div>
+                      <span><strong>{name}</strong><small>{capacity - used}칸 여유</small></span>
+                    </div>
+                    <div className="lane-grid">
+                      {Array.from({ length: capacity }, (_, index) => <span key={index} className="grid-cell"><i>{index + 1}</i></span>)}
+                      <div className="equipped-cards">
+                        {entries.map((entry) => {
+                          const skill = skills.find((item) => item.id === entry.skillId)!;
+                          return (
+                            <button key={skill.id} style={{ "--span": skill.gridCost } as React.CSSProperties} className={`equipped-card ${entry.mode}`} onClick={() => { setSelectedId(skill.id); setMode(entry.mode); }}>
+                              <SkillSeal skill={skill} small />
+                              <span><strong>{skill.name}</strong><small>{entry.mode === "direct" ? "정련" : "역련"} · {skill.grade}품 · {skill.gridCost}칸</small></span>
+                              <span className="remove-skill" role="button" aria-label={`${skill.name} 제거`} onClick={(event) => { event.stopPropagation(); updateEquipped((current) => current.filter((item) => item.skillId !== skill.id)); }}><Minus size={12} /></span>
+                            </button>
+                          );
+                        })}
+                        {used < capacity && <span className="empty-hint"><Plus size={14} /> 무공 배치</span>}
+                      </div>
                     </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </div>
-          <div className="board-footnote"><Check size={14} /> 게임의 각 계통별 9칸 제한과 무공별 점유 칸수를 그대로 계산합니다.</div>
+          <div className="board-footnote"><Check size={14} /> 클라이언트에서 추출한 5계통·{uiProfile.totalSlotCount}칸·카드 {uiProfile.slotVisualSize.width}×{uiProfile.slotVisualSize.height} 비율과 무공별 GridCount를 반영합니다.</div>
         </section>
 
         <aside className="analysis-panel panel">
@@ -418,7 +452,14 @@ export default function Planner() {
             <div className="effect-title"><Sparkles size={15} /><strong>{activeEffect.short[0] || activeEffect.name}</strong>{selected.codeVerified && <span><ShieldCheck size={12} /> 코드 검증</span>}</div>
             <p>{activeEffect.description || "이 수련 방식에는 별도 특수 효과 설명이 없습니다."}</p>
             <div className="tag-list">{displayFacets.map((tag) => <span key={tag}>#{tag}</span>)}</div>
-            {activeEffect.tags.includes("현재부상만") && <div className="code-note"><GitCompareArrows size={15} /><span><strong>판정 보정:</strong> 실제 코드가 현재 부상에서 오래된 부상을 뺀 뒤 제거 대상을 만듭니다.</span></div>}
+            <div className="logic-summary">
+              <div className="logic-heading"><GitCompareArrows size={14} /><strong>자동 추출 관계식</strong><span>{activeEffect.analysis.logic.coverage.conditionCount}조건 · {activeEffect.analysis.logic.coverage.operationCount}동작</span></div>
+              <div className="logic-flow">
+                {logicEvents.map((event) => <span className="logic-event" key={event}>발동 · {event}</span>)}
+                {logicConditions.map((condition, index) => <span className="logic-condition" key={`${condition.expression}-${index}`} title={condition.expression}>조건 · {[...condition.resources, ...condition.states].slice(0, 2).join(" · ") || condition.target}</span>)}
+                {logicOperations.map((operation, index) => <span className={`logic-operation verb-${operation.verb}`} key={`${operation.symbol}-${index}`} title={operation.evidence}>{operation.target} · {operation.resources.filter((resource) => resource !== "전투 상태").slice(0, 2).join(" · ")} {logicVerbNames[operation.verb] || "변경"}</span>)}
+              </div>
+            </div>
           </div>
           {(selected.combat.recommendedWeaponName || selected.combat.fixedWeaponName || selected.combat.trickCost.length > 0) && (
             <div className="combat-conditions">

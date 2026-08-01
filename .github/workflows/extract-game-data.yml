@@ -1,6 +1,8 @@
 name: Extract Taiwu martial arts
 
 on:
+  schedule:
+    - cron: "17 20 * * *"
   workflow_dispatch:
     inputs:
       game_directory:
@@ -22,10 +24,16 @@ jobs:
         with:
           dotnet-version: "8.0.x"
       - name: Install ILSpy command line
-        run: dotnet tool install --global ilspycmd
+        shell: powershell
+        run: |
+          if (Get-Command ilspycmd -ErrorAction SilentlyContinue) {
+            dotnet tool update --global ilspycmd
+          } else {
+            dotnet tool install --global ilspycmd
+          }
       - name: Extract current game data
         env:
-          TAIWU_GAME_DIR: ${{ inputs.game_directory }}
+          TAIWU_GAME_DIR: ${{ inputs.game_directory || vars.TAIWU_GAME_DIR || 'H:\SteamLibrary\steamapps\common\The Scroll Of Taiwu' }}
           ILSPYCMD: ilspycmd
         run: node extractor/extract.mjs
       - name: Commit changed dataset

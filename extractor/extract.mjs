@@ -2,9 +2,10 @@
 
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { extractCodeLogic } from "./code-ir.mjs";
 
 const argv = process.argv.slice(2);
 const valueOf = (name, fallback) => {
@@ -24,11 +25,13 @@ const withCode = !argv.includes("--no-code");
 const backend = join(gameRoot, "Backend");
 const sharedDll = join(backend, "GameData.Shared.dll");
 const gameDll = join(backend, "GameData.dll");
+const managed = join(gameRoot, "The Scroll of Taiwu_Data", "Managed");
+const clientDll = join(managed, "Assembly-CSharp.dll");
 const stream = join(gameRoot, "The Scroll of Taiwu_Data", "StreamingAssets");
 const languageKo = join(stream, "Language_KO");
 const languageCn = join(stream, "Language_CN");
 
-for (const path of [sharedDll, gameDll, languageKo, languageCn]) {
+for (const path of [sharedDll, gameDll, clientDll, languageKo, languageCn]) {
   if (!existsSync(path)) throw new Error(`필수 게임 파일을 찾지 못했습니다: ${path}`);
 }
 
@@ -50,6 +53,17 @@ function decompileType(typeName) {
     execFileSync(ilspy.command, [...ilspy.prefix, "-r", backend, "-t", typeName, "-o", cacheRoot, sharedDll], {
       stdio: "inherit",
     });
+  }
+  return readFileSync(destination, "utf8");
+}
+
+function decompileClientType(typeName) {
+  const destination = join(cacheRoot, `${typeName}.client.decompiled.cs`);
+  if (!existsSync(destination) || statSync(destination).mtimeMs < statSync(clientDll).mtimeMs) {
+    const temporary = join(cacheRoot, `${typeName}.decompiled.cs`);
+    execFileSync(ilspy.command, [...ilspy.prefix, "-r", managed, "-t", typeName, "-o", cacheRoot, clientDll], { stdio: "inherit" });
+    if (!existsSync(temporary)) throw new Error(`클라이언트 UI 형식을 역컴파일하지 못했습니다: ${typeName}`);
+    writeFileSync(destination, readFileSync(temporary));
   }
   return readFileSync(destination, "utf8");
 }
@@ -148,6 +162,8 @@ const effectSource = decompileType("Config.SpecialEffect");
 const weaponSource = decompileType("Config.Weapon");
 const trickSource = decompileType("Config.TrickType");
 const dataFieldSource = decompileType("Config.SpecialEffectDataField");
+const combatSkillHelperSource = decompileType("GameData.Domains.Character.CombatSkillHelper");
+const equipUiSource = decompileClientType("UI_CharacterMenuEquipCombatSkill");
 const codeRoot = withCode ? decompileCode() : null;
 const combatKo = readPairs(join(languageKo, "CombatSkill_language.txt"));
 const combatCn = readPairs(join(languageCn, "CombatSkill_language.txt"));
@@ -186,6 +202,23 @@ function numbersInList(expression) {
   const body = expression.match(/\{([\s\S]*?)\}/)?.[1] || "";
   return [...body.matchAll(/-?\d+/g)].map((match) => Number(match[0]));
 }
+
+const uiProfile = {
+  equipTypeCount: readInteger(combatSkillHelperSource.match(/MaxSlotCounts\s*=([^;]+)/)?.[1] || "", 5),
+  maxSlotCounts: numbersInList(combatSkillHelperSource.match(/MaxSlotCounts\s*=([^;]+)/)?.[1] || "").slice(-5),
+  slotBeginIndexes: numbersInList(combatSkillHelperSource.match(/SlotBeginIndexes\s*=([^;]+)/)?.[1] || "").slice(-5),
+  slotEndIndexes: numbersInList(combatSkillHelperSource.match(/SlotEndIndexes\s*=([^;]+)/)?.[1] || "").slice(-5),
+  totalSlotCount: readInteger(combatSkillHelperSource.match(/TotalSlotCount\s*=\s*([^;]+)/)?.[1] || "45", 45),
+  globalMaxSlotCount: readInteger(combatSkillHelperSource.match(/GlobalMaxSlotCount\s*=\s*([^;]+)/)?.[1] || "99", 99),
+  genericAllocationCostFactor: numbersInList(combatSkillHelperSource.match(/GenericAllocationCostFactor\s*=([^;]+)/)?.[1] || ""),
+  slotVisualSize: {
+    width: Number(equipUiSource.match(/SlotSize\s*=\s*new Vector2\(([\d.]+)f?/)?.[1] || 186),
+    height: Number(equipUiSource.match(/SlotSize\s*=\s*new Vector2\([\d.]+f?,\s*([\d.]+)f?/)?.[1] || 200),
+  },
+  equipTypeLogos: numbersInList(equipUiSource.match(/_equipTypeLogos\s*=([^;]+)/)?.[1] || "").slice(-5),
+  supportsGenericGridAllocation: /AllocateGenericGrid/.test(equipUiSource),
+  supportsMultiplePlans: /_currEquipPlan|PlanHolder/.test(equipUiSource),
+};
 
 const tricks = extractCalls(trickSource, "TrickTypeItem").map((call) => {
   const args = splitArguments(call);
@@ -274,10 +307,56 @@ function valuesFor(map, prefix, id) {
   return result;
 }
 
+let codeClassIndex = null;
+const codeClosureCache = new Map();
+
+function indexCodeClasses() {
+  if (codeClassIndex || !codeRoot) return codeClassIndex;
+  codeClassIndex = new Map();
+  const root = join(codeRoot, "GameData", "Domains", "SpecialEffect");
+  const visit = (directory) => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) visit(path);
+      else if (entry.isFile() && entry.name.endsWith(".cs")) {
+        const source = readFileSync(path, "utf8");
+        const declaration = source.match(/\bclass\s+([A-Za-z_][A-Za-z0-9_]*)(?:<[^>{}]+>)?\s*(?::\s*([A-Za-z_][A-Za-z0-9_.]*(?:<[^>{}]+>)?))?/);
+        if (!declaration) continue;
+        const name = declaration[1];
+        const baseName = declaration[2]?.replace(/<.*$/, "").split(".").at(-1) || null;
+        const existing = codeClassIndex.get(name) || [];
+        existing.push({ name, baseName, path, source });
+        codeClassIndex.set(name, existing);
+      }
+    }
+  };
+  visit(root);
+  return codeClassIndex;
+}
+
 function codeFor(className) {
   if (!codeRoot || !className || className === "null") return "";
+  if (codeClosureCache.has(className)) return codeClosureCache.get(className);
   const path = join(codeRoot, "GameData", "Domains", "SpecialEffect", ...className.split(".")) + ".cs";
-  return existsSync(path) ? readFileSync(path, "utf8") : "";
+  if (!existsSync(path)) return "";
+  const index = indexCodeClasses();
+  const chain = [];
+  const visited = new Set();
+  let current = { source: readFileSync(path, "utf8"), baseName: null, path };
+  for (let depth = 0; current && depth < 16; depth += 1) {
+    const declaration = current.source.match(/\bclass\s+([A-Za-z_][A-Za-z0-9_]*)(?:<[^>{}]+>)?\s*(?::\s*([A-Za-z_][A-Za-z0-9_.]*(?:<[^>{}]+>)?))?/);
+    const currentName = declaration?.[1] || basename(current.path, ".cs");
+    const baseName = declaration?.[2]?.replace(/<.*$/, "").split(".").at(-1) || current.baseName;
+    if (visited.has(currentName)) break;
+    visited.add(currentName);
+    chain.push(`// inheritance:${depth}:${currentName}\n${current.source}`);
+    if (!baseName || ["Object", "SpecialEffectBase", "CombatSkillSpecialEffectBase"].includes(baseName)) break;
+    const candidates = index.get(baseName) || [];
+    current = candidates.find((candidate) => /Common/.test(candidate.path)) || candidates[0] || null;
+  }
+  const result = chain.join("\n\n");
+  codeClosureCache.set(className, result);
+  return result;
 }
 
 const tagRules = [
@@ -392,7 +471,7 @@ const actionRules = {
   clears: /消除|移除|驱除|治愈|清除|抵消|转移|제거|해제|치유|정화|전이/i,
   amplifies: /提高|增加|提升|强化|恶化|延长|加快|증가|향상|강화|악화|연장|가속/i,
   reduces: /降低|减少|减弱|缩短|恢复|치유|감소|저하|약화|단축|회복/i,
-  prevents: /禁止|无法|免受|免于|无效|无视|抵消|不可|不会|금지|불가|면역|무효|무시|방지/i,
+  prevents: /禁止|无法|免受|免于|无效|无视|抵消|不可(?!避免)|不会|금지|불가(?!피)|면역|무효|무시|방지/i,
   requires: /当|每当|如果|若|根据|每有|需要|때|경우|마다|보유|필요/i,
 };
 
@@ -407,12 +486,12 @@ function normalizeMechanicAxis(value) {
     .trim();
 }
 
-function analyzeEffect(textKo, textCn, code, shortKo = [], shortCn = []) {
+function analyzeEffect(textKo, textCn, code, mode, shortKo = [], shortCn = []) {
   const text = `${textCn} ${textKo}`;
   const concepts = matchedConcepts(text);
   const triggers = triggerRules.filter(([, pattern]) => pattern.test(text)).map(([label]) => label);
   const buckets = { produces: [], consumes: [], clears: [], amplifies: [], reduces: [], prevents: [], requires: [] };
-  const clauses = text.split(/[；;。.!！?？\n]/).filter(Boolean);
+  const clauses = text.split(/[；;。.!！?？，,\n]/).filter(Boolean);
   for (const clause of clauses) {
     const clauseConcepts = matchedConcepts(clause);
     for (const [bucket, pattern] of Object.entries(actionRules)) {
@@ -420,13 +499,20 @@ function analyzeEffect(textKo, textCn, code, shortKo = [], shortCn = []) {
     }
   }
   const unique = (values) => [...new Set(values)];
-  const codeEvents = unique([...code.matchAll(/RegisterHandler_([A-Za-z0-9_]+)/g)].map((match) => match[1]));
-  const codeSignals = unique([...code.matchAll(/\b(?:DomainManager\.[A-Za-z0-9_.]+\.)?((?:Add|Change|Remove|Clear|Cost|Use|Cast|Move|Damage|Injur|Poison|Trick|Weapon|CombatSkill|Mark|Defeat|Flaw|Acupoint|Disorder|Stance|Breath)[A-Za-z0-9_]{3,})\s*\(/g)].map((match) => match[1])).slice(0, 60);
-  const affectedFieldIds = unique([
-    ...[...code.matchAll(/CreateAffectedData\(\s*(\d+)/g)].map((match) => Number(match[1])),
-    ...[...code.matchAll(/FieldId\s*==\s*(\d+)/g)].map((match) => Number(match[1])),
-    ...[...code.matchAll(/InvalidateCache\([^;\n]*?,\s*(\d+)\s*\)/g)].map((match) => Number(match[1])),
-  ]);
+  const logic = extractCodeLogic(code, mode);
+  const codeEvents = logic.events.map((event) => event.name);
+  const codeEventLabels = unique(logic.events.map((event) => event.label));
+  const codeSignals = logic.symbols;
+  const affectedFieldIds = logic.affectedFieldIds;
+  for (const eventLabel of codeEventLabels) {
+    if (eventLabel !== "코드 이벤트") triggers.push(eventLabel);
+  }
+  for (const operation of logic.operations) {
+    if (buckets[operation.verb]) buckets[operation.verb].push(...operation.resources.filter((resource) => resource !== "전투 상태"));
+  }
+  for (const condition of logic.conditions) {
+    if (condition.polarity === "requires") buckets.requires.push(...condition.resources);
+  }
   const quotedAxes = [...textCn.matchAll(/「([^」]{1,24})」/g)].map((match) => match[1]);
   const quotedLabels = [...textKo.matchAll(/「([^」]{1,24})」/g)].map((match) => match[1]);
   const explicitAxes = [...textCn.matchAll(/(?:功法|神力)(?:威力|发挥|消耗|施展|命中|伤害|层数|封禁|效果|需求|上限)/g)].map((match) => match[0]);
@@ -455,9 +541,14 @@ function analyzeEffect(textKo, textCn, code, shortKo = [], shortCn = []) {
     mechanicAxes,
     mechanicLabels: unique([...shortKo.filter(Boolean), ...quotedLabels]),
     codeEvents,
+    codeEventLabels,
     codeSignals,
     affectedFields: affectedFieldIds.map((fieldId) => affectedFieldById.get(fieldId)?.name || `전투 필드 ${fieldId}`),
     affectedFieldIds,
+    logic: {
+      ...logic,
+      affectedFields: affectedFieldIds.map((fieldId) => affectedFieldById.get(fieldId)?.name || `전투 필드 ${fieldId}`),
+    },
   };
 }
 
@@ -471,7 +562,7 @@ function detectTags(text, code) {
   return [...tags];
 }
 
-const equipNames = ["내공", "최파", "경공", "호체", "기규"];
+const equipNames = ["내공", "최파", "경령", "호체", "기규"];
 const typeNames = ["내공", "권장", "지법", "퇴법", "암기", "검법", "도법", "장병", "기문", "연병", "음률", "어사", "경공", "호체·기규"];
 const elementNames = ["금", "목", "수", "화", "토", "혼원"];
 const sectNames = ["무문무파", "소림파", "아미파", "백화곡", "무당파", "연산파", "복룡단", "주검산장", "사상문", "공상파", "오선교", "현녀파", "혈후교", "계청문", "원산파"];
@@ -500,8 +591,8 @@ for (const call of extractCalls(combatSource, "CombatSkillItem")) {
   const reverseShortKo = valuesFor(effectKo, "ShortDesc", reverseId);
   const directShortValuesCn = valuesFor(effectCn, "ShortDesc", directId);
   const reverseShortValuesCn = valuesFor(effectCn, "ShortDesc", reverseId);
-  const directAnalysis = analyzeEffect(`${directShortKo.join(" ")} ${directDesc}`, `${directShortCn} ${directCn}`, code, directShortKo, directShortValuesCn);
-  const reverseAnalysis = analyzeEffect(`${reverseShortKo.join(" ")} ${reverseDesc}`, `${reverseShortCn} ${reverseCn}`, code, reverseShortKo, reverseShortValuesCn);
+  const directAnalysis = analyzeEffect(`${directShortKo.join(" ")} ${directDesc}`, `${directShortCn} ${directCn}`, code, "direct", directShortKo, directShortValuesCn);
+  const reverseAnalysis = analyzeEffect(`${reverseShortKo.join(" ")} ${reverseDesc}`, `${reverseShortCn} ${reverseCn}`, code, "reverse", reverseShortKo, reverseShortValuesCn);
   const equipType = readInteger(args[5], -1);
   const type = readInteger(args[6], -1);
   const sect = readInteger(args[9], -1);
@@ -632,13 +723,13 @@ skills.sort((a, b) => a.id - b.id);
 const allAnalyses = skills.flatMap((skill) => [skill.direct.analysis, skill.reverse.analysis]);
 const countUnique = (field) => new Set(allAnalyses.flatMap((analysis) => analysis[field])).size;
 const digest = createHash("sha256");
-for (const path of [sharedDll, gameDll, join(languageKo, "CombatSkill_language.txt"), join(languageKo, "SpecialEffect_language.txt")]) {
+for (const path of [sharedDll, gameDll, clientDll, join(languageKo, "CombatSkill_language.txt"), join(languageKo, "SpecialEffect_language.txt")]) {
   digest.update(readFileSync(path));
 }
 
 const payload = {
   meta: {
-    schemaVersion: 1,
+    schemaVersion: 2,
     extractedAt: new Date().toISOString(),
     sourceHash: digest.digest("hex"),
     gameRootName: basename(gameRoot),
@@ -652,6 +743,9 @@ const payload = {
       triggerCount: countUnique("triggers"),
       codeEventCount: countUnique("codeEvents"),
       codeSignalCount: countUnique("codeSignals"),
+      codeLogicOperationCount: allAnalyses.reduce((sum, analysis) => sum + analysis.logic.operations.length, 0),
+      codeLogicConditionCount: allAnalyses.reduce((sum, analysis) => sum + analysis.logic.conditions.length, 0),
+      codeLogicCoveredEffectCount: allAnalyses.filter((analysis) => analysis.logic.events.length || analysis.logic.conditions.length || analysis.logic.operations.length).length,
       affectedFieldCount: affectedFields.length,
       weaponCount: weapons.length,
       trickTypeCount: tricks.length,
@@ -660,6 +754,7 @@ const payload = {
   tricks,
   weapons,
   affectedFields,
+  ui: uiProfile,
   skills,
 };
 
