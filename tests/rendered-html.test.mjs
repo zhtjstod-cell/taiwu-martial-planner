@@ -19,6 +19,7 @@ test("server-renders the Taiwu planner", async () => {
   assert.match(html, /<title>태오회권 무공진<\/title>/i);
   assert.match(html, /태오회권 무공진/);
   assert.match(html, /구색옥선법/);
-  assert.match(html, /운공 조정/);
+  assert.match(html, /운공 배치/);
+  assert.match(html, /만능공법칸/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton/i);
 });

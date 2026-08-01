@@ -10,6 +10,7 @@
     "build": "vinext build",
     "start": "vinext start",
     "extract": "node extractor/extract.mjs",
+    "extract:ui": "python extractor/extract-ui-assets.py --game \"H:\\SteamLibrary\\steamapps\\common\\The Scroll Of Taiwu\" --out public/game-ui",
     "test": "npm run build && node --test \"tests/*.test.mjs\"",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate"

@@ -163,6 +163,7 @@ const weaponSource = decompileType("Config.Weapon");
 const trickSource = decompileType("Config.TrickType");
 const dataFieldSource = decompileType("Config.SpecialEffectDataField");
 const combatSkillHelperSource = decompileType("GameData.Domains.Character.CombatSkillHelper");
+const globalConfigSource = decompileType("GlobalConfig");
 const equipUiSource = decompileClientType("UI_CharacterMenuEquipCombatSkill");
 const codeRoot = withCode ? decompileCode() : null;
 const combatKo = readPairs(join(languageKo, "CombatSkill_language.txt"));
@@ -175,6 +176,10 @@ const trickKo = readPairs(join(languageKo, "TrickType_language.txt"));
 const trickCn = readPairs(join(languageCn, "TrickType_language.txt"));
 const dataFieldKo = readPairs(join(languageKo, "SpecialEffectDataField_language.txt"));
 const dataFieldCn = readPairs(join(languageCn, "SpecialEffectDataField_language.txt"));
+const combatSkillTypeKo = readPairs(join(languageKo, "CombatSkillType_language.txt"));
+const organizationKo = readPairs(join(languageKo, "Organization_language.txt"));
+const organizationCn = readPairs(join(languageCn, "Organization_language.txt"));
+const uiKo = readPairs(join(languageKo, "ui_language.txt"));
 
 const effectRows = new Map();
 for (const call of extractCalls(effectSource, "SpecialEffectItem")) {
@@ -211,6 +216,7 @@ const uiProfile = {
   totalSlotCount: readInteger(combatSkillHelperSource.match(/TotalSlotCount\s*=\s*([^;]+)/)?.[1] || "45", 45),
   globalMaxSlotCount: readInteger(combatSkillHelperSource.match(/GlobalMaxSlotCount\s*=\s*([^;]+)/)?.[1] || "99", 99),
   genericAllocationCostFactor: numbersInList(combatSkillHelperSource.match(/GenericAllocationCostFactor\s*=([^;]+)/)?.[1] || ""),
+  initialSlotCounts: numbersInList(globalConfigSource.match(/CombatSkillInitialEquipSlotCounts\s*=([^;]+)/)?.[1] || "").slice(-6),
   slotVisualSize: {
     width: Number(equipUiSource.match(/SlotSize\s*=\s*new Vector2\(([\d.]+)f?/)?.[1] || 186),
     height: Number(equipUiSource.match(/SlotSize\s*=\s*new Vector2\([\d.]+f?,\s*([\d.]+)f?/)?.[1] || 200),
@@ -402,10 +408,10 @@ const conceptRules = [
   ["신법", /身法|신법/i],
   ["진기", /真气|진기/i],
   ["내공 진기", /内功.*真气|内力|내공.*진기|내력/i],
-  ["최파 진기", /摧破真气|최파 진기/i],
+  ["파괴 진기", /摧破真气|최파 진기|파괴 진기/i],
   ["경령 진기", /轻灵真气|경령 진기/i],
   ["호체 진기", /护体真气|호체 진기/i],
-  ["기규 진기", /奇窍.*真气|기규.*진기/i],
+  ["기교 진기", /奇窍.*真气|기규.*진기|기교.*진기/i],
   ["식", /蓄式|「[^」]{1,2}」式|축식|「[^」]{1,2}」 식/i],
   ["살식", /「杀」式|杀式|살식/i],
   ["공격 거리", /攻击范围|敌我距离|공격 범위|적과.*거리/i],
@@ -429,10 +435,10 @@ const conceptRules = [
   ["방어구", /护具|护甲|방어구|호구/i],
   ["장비", /装备|장비/i],
   ["내구도", /耐久|损耗.*装备|내구/i],
-  ["최파 무공", /摧破功法|최파.*무공/i],
+  ["파괴 공법", /摧破功法|최파.*무공|파괴.*공법/i],
   ["경령 무공", /轻灵功法|경령.*무공|경공/i],
   ["호체 무공", /护体功法|호체.*무공/i],
-  ["기규 무공", /奇窍功法|기규.*무공/i],
+  ["기교 공법", /奇窍功法|기규.*무공|기교.*공법/i],
   ["내공", /内功|내공/i],
   ["강화 상태", /增益状态|增益|강화 상태|버프/i],
   ["약화 상태", /减益状态|损害状态|약화 상태|디버프/i],
@@ -486,6 +492,82 @@ function normalizeMechanicAxis(value) {
     .trim();
 }
 
+const harmfulResources = new Set([
+  "직접 피해", "피해", "외상", "내상", "중상", "부상", "오래된 부상", "파열", "봉혈", "실신",
+  "필사 표식", "패배 표식", "독", "독 등급", "고독", "내식 문란", "약화 상태", "봉금", "무기 내구도",
+]);
+const beneficialResources = new Set([
+  "자세", "호흡", "기세", "각력", "신법", "진기", "내공 진기", "파괴 진기", "경령 진기", "호체 진기", "기교 진기",
+  "식", "공격 거리", "이동 속도", "명중", "회피·파해", "파체", "파기", "방어", "피해 감소", "반격·반사",
+  "무공 위력", "시전 진행", "시전 속도", "공격 속도", "강화 상태", "내구도", "오행",
+]);
+
+function semanticTargetFor(text) {
+  const self = /운용자|사용자|자신|본인|스스로|己方|自身|自己|运用者|使用者/i.test(text);
+  const enemy = /(?:^|[^가-힣])적(?:의|에게|이|을|과|은|이)?|상대|敌人|敌方|对手/i.test(text);
+  if (self && enemy) return "양측";
+  if (enemy) return "적";
+  if (self) return "자신";
+  return "미상";
+}
+
+function resourceValence(resource) {
+  if (harmfulResources.has(resource)) return "해로운 상태";
+  if (beneficialResources.has(resource)) return "이로운 상태";
+  return "중립 자원";
+}
+
+function buildSemanticEdges(clauses, logic) {
+  const edges = [];
+  for (const operation of logic.operations) {
+    for (const resource of operation.resources) {
+      if (resource === "전투 상태") continue;
+      edges.push({
+        verb: operation.verb,
+        resource,
+        target: operation.target,
+        valence: resourceValence(resource),
+        source: "code",
+        confidence: operation.target === "전투 상태" ? 1 : 3,
+        evidence: operation.evidence,
+      });
+    }
+  }
+  for (const clause of clauses) {
+    const resources = matchedConcepts(clause);
+    if (!resources.length) continue;
+    const target = semanticTargetFor(clause);
+    const verbs = [];
+    const convertsToOldInjury = resources.includes("오래된 부상")
+      && /转(?:化)?为|变为|전환|구상처로\s*변|오래된\s*부상(?:으)?로\s*변/i.test(clause);
+    if (convertsToOldInjury) verbs.push("produces");
+    else if (actionRules.prevents.test(clause)) verbs.push("prevents");
+    else if (actionRules.clears.test(clause)) verbs.push("clears");
+    else if (actionRules.consumes.test(clause)) verbs.push("consumes");
+    else if (actionRules.reduces.test(clause)) verbs.push("reduces");
+    else if (actionRules.produces.test(clause)) verbs.push("produces");
+    else if (actionRules.amplifies.test(clause)) verbs.push("amplifies");
+    if (actionRules.requires.test(clause)) verbs.push("requires");
+    for (const verb of [...new Set(verbs)]) {
+      for (const resource of resources) {
+        edges.push({
+          verb,
+          resource,
+          target,
+          valence: resourceValence(resource),
+          source: "tooltip",
+          confidence: target === "미상" ? 1 : 2,
+          evidence: clause.replace(/<[^>]+>/g, "").trim().slice(0, 220),
+        });
+      }
+    }
+  }
+  return [...new Map(edges.map((edge) => [
+    `${edge.verb}|${edge.resource}|${edge.target}|${edge.source}`,
+    edge,
+  ])).values()];
+}
+
 function analyzeEffect(textKo, textCn, code, mode, shortKo = [], shortCn = []) {
   const text = `${textCn} ${textKo}`;
   const concepts = matchedConcepts(text);
@@ -500,6 +582,7 @@ function analyzeEffect(textKo, textCn, code, mode, shortKo = [], shortCn = []) {
   }
   const unique = (values) => [...new Set(values)];
   const logic = extractCodeLogic(code, mode);
+  const semanticEdges = buildSemanticEdges(clauses, logic);
   const codeEvents = logic.events.map((event) => event.name);
   const codeEventLabels = unique(logic.events.map((event) => event.label));
   const codeSignals = logic.symbols;
@@ -545,6 +628,7 @@ function analyzeEffect(textKo, textCn, code, mode, shortKo = [], shortCn = []) {
     codeSignals,
     affectedFields: affectedFieldIds.map((fieldId) => affectedFieldById.get(fieldId)?.name || `전투 필드 ${fieldId}`),
     affectedFieldIds,
+    semanticEdges,
     logic: {
       ...logic,
       affectedFields: affectedFieldIds.map((fieldId) => affectedFieldById.get(fieldId)?.name || `전투 필드 ${fieldId}`),
@@ -562,11 +646,8 @@ function detectTags(text, code) {
   return [...tags];
 }
 
-const equipNames = ["내공", "최파", "경령", "호체", "기규"];
-const typeNames = ["내공", "권장", "지법", "퇴법", "암기", "검법", "도법", "장병", "기문", "연병", "음률", "어사", "경공", "호체·기규"];
+const equipNames = Array.from({ length: 5 }, (_, index) => uiKo.get(`LK_CombatSkill_EquipType_${index}`) || ["내공", "파괴", "경령", "호체", "기교"][index]);
 const elementNames = ["금", "목", "수", "화", "토", "혼원"];
-const sectNames = ["무문무파", "소림파", "아미파", "백화곡", "무당파", "연산파", "복룡단", "주검산장", "사상문", "공상파", "오선교", "현녀파", "혈후교", "계청문", "원산파"];
-const sectNamesCn = ["无门无派", "少林派", "峨眉派", "百花谷", "武当派", "然山派", "伏龙坛", "铸剑山庄", "狮相门", "空桑派", "五仙教", "璇女派", "血犼教", "界青门", "元山派"];
 
 const skills = [];
 for (const call of extractCalls(combatSource, "CombatSkillItem")) {
@@ -585,14 +666,14 @@ for (const call of extractCalls(combatSource, "CombatSkillItem")) {
   const directCn = valuesFor(effectCn, "DetailedDesc", directId).join(" ") || valuesFor(effectCn, "Desc", directId).join(" ");
   const reverseCn = valuesFor(effectCn, "DetailedDesc", reverseId).join(" ") || valuesFor(effectCn, "Desc", reverseId).join(" ");
   const sharedText = [directDesc, reverseDesc, directCn, reverseCn, valuesFor(effectKo, "ShortDesc", directId).join(" "), valuesFor(effectKo, "ShortDesc", reverseId).join(" ")].join(" ");
-  const directShortCn = valuesFor(effectCn, "ShortDesc", directId).join(" ");
-  const reverseShortCn = valuesFor(effectCn, "ShortDesc", reverseId).join(" ");
+  const directShortCn = valuesFor(effectCn, "ShortDesc", directId).join("\n");
+  const reverseShortCn = valuesFor(effectCn, "ShortDesc", reverseId).join("\n");
   const directShortKo = valuesFor(effectKo, "ShortDesc", directId);
   const reverseShortKo = valuesFor(effectKo, "ShortDesc", reverseId);
   const directShortValuesCn = valuesFor(effectCn, "ShortDesc", directId);
   const reverseShortValuesCn = valuesFor(effectCn, "ShortDesc", reverseId);
-  const directAnalysis = analyzeEffect(`${directShortKo.join(" ")} ${directDesc}`, `${directShortCn} ${directCn}`, code, "direct", directShortKo, directShortValuesCn);
-  const reverseAnalysis = analyzeEffect(`${reverseShortKo.join(" ")} ${reverseDesc}`, `${reverseShortCn} ${reverseCn}`, code, "reverse", reverseShortKo, reverseShortValuesCn);
+  const directAnalysis = analyzeEffect(`${directShortKo.join("\n")}\n${directDesc}`, `${directShortCn}\n${directCn}`, code, "direct", directShortKo, directShortValuesCn);
+  const reverseAnalysis = analyzeEffect(`${reverseShortKo.join("\n")}\n${reverseDesc}`, `${reverseShortCn}\n${reverseCn}`, code, "reverse", reverseShortKo, reverseShortValuesCn);
   const equipType = readInteger(args[5], -1);
   const type = readInteger(args[6], -1);
   const sect = readInteger(args[9], -1);
@@ -623,6 +704,7 @@ for (const call of extractCalls(combatSource, "CombatSkillItem")) {
   const rangeMin = weaponCandidates.length ? Math.min(...weaponCandidates.map((weapon) => weapon.minDistance)) : null;
   const rangeMax = weaponCandidates.length ? Math.max(...weaponCandidates.map((weapon) => weapon.maxDistance + distanceAddition)) : null;
   const requiredBodyParts = resolveNumberArray(args[62], id, "List<sbyte>");
+  const specificGrids = resolveNumberArray(args[32], id, "sbyte[]").slice(0, 4);
   const injuryPartDistribution = resolveNumberArray(args[74], id, "sbyte[]");
   const hitPowerDistribution = resolveNumberArray(args[76], id, "sbyte[]");
   const outerDamageSteps = resolveNumberArray(args[114], id, "int[]");
@@ -639,11 +721,14 @@ for (const call of extractCalls(combatSource, "CombatSkillItem")) {
     equipType,
     equipName: equipNames[equipType] || "기타",
     type,
-    typeName: typeNames[type] || "기타",
+    typeName: combatSkillTypeKo.get(`Name_${type}`) || `공법 유형 ${type}`,
     gridCost: readInteger(args[8], 1),
+    masteredGridCost: Math.max(readInteger(args[8], 1) - 1, 1),
+    specificGrids,
+    genericGrid: readInteger(args[33], 0),
     sect,
-    sectName: sectNames[sect] || `세력 ${sect}`,
-    sectNameCn: sectNamesCn[sect] || `Sect${sect}`,
+    sectName: organizationKo.get(`Name_${sect}`) || `세력 ${sect}`,
+    sectNameCn: organizationCn.get(`Name_${sect}`) || `Sect${sect}`,
     element,
     elementName: elementNames[element] || "무속성",
     direct: {
@@ -720,7 +805,170 @@ for (const call of extractCalls(combatSource, "CombatSkillItem")) {
 }
 
 skills.sort((a, b) => a.id - b.id);
+
+const relationAudit = {
+  evaluatedModePairs: 0,
+  synergyCount: 0,
+  counterCount: 0,
+  rejectedOpponentHealingEdges: 0,
+  missingEvidenceCount: 0,
+};
+
+function effectFor(skill, mode) {
+  return skill[mode];
+}
+
+function edgeMatches(edge, verbs, target, resource = null) {
+  return edge.confidence >= 2
+    && verbs.includes(edge.verb)
+    && edge.target === target
+    && (resource === null || edge.resource === resource);
+}
+
+const broadRelationResources = new Set(["전투 상태", "피해", "부상", "표식", "진기", "식", "무공", "이동", "방어", "무기", "장비", "내구도", "강화 상태", "약화 상태"]);
+function isSpecificRelationResource(resource) {
+  return !broadRelationResources.has(resource);
+}
+
+function bestRelationCandidate() {
+  let best = null;
+  return {
+    consider(score, reason, basis, resource, evidence) {
+      if (!reason || !evidence || score <= (best?.score || 0)) return;
+      best = { score, reason, basis, resource, evidence: evidence.slice(0, 220) };
+    },
+    result() { return best; },
+  };
+}
+
+function evaluateSynergy(selected, selectedMode, candidate, candidateMode) {
+  relationAudit.evaluatedModePairs += 1;
+  const selectedEffect = effectFor(selected, selectedMode);
+  const candidateEffect = effectFor(candidate, candidateMode);
+  const aEdges = selectedEffect.analysis.semanticEdges;
+  const bEdges = candidateEffect.analysis.semanticEdges;
+  const best = bestRelationCandidate();
+  const supplies = ["produces", "amplifies"];
+  const needs = ["requires", "consumes", "amplifies"];
+
+  for (const supply of aEdges.filter((edge) => edgeMatches(edge, supplies, "자신") && edge.valence === "이로운 상태" && isSpecificRelationResource(edge.resource))) {
+    const need = bEdges.find((edge) => edgeMatches(edge, needs, "자신", supply.resource));
+    if (need) best.consider(46, `선택 공법이 공급하는 「${supply.resource}」을 이 공법의 발동·소모 조건으로 직접 사용`, "resource-chain", supply.resource, `${supply.evidence} / ${need.evidence}`);
+  }
+  for (const supply of bEdges.filter((edge) => edgeMatches(edge, supplies, "자신") && edge.valence === "이로운 상태" && isSpecificRelationResource(edge.resource))) {
+    const need = aEdges.find((edge) => edgeMatches(edge, needs, "자신", supply.resource));
+    if (need) best.consider(48, `이 공법이 공급하는 「${supply.resource}」으로 선택 공법의 발동·소모 조건을 완성`, "resource-chain", supply.resource, `${supply.evidence} / ${need.evidence}`);
+  }
+  for (const supply of aEdges.filter((edge) => edgeMatches(edge, supplies, "적") && edge.valence === "해로운 상태" && isSpecificRelationResource(edge.resource))) {
+    const follow = bEdges.find((edge) => edgeMatches(edge, needs, "적", supply.resource));
+    if (follow) best.consider(50, `선택 공법이 적에게 남기는 「${supply.resource}」을 이 공법이 조건·소모·증폭에 사용`, "offense-chain", supply.resource, `${supply.evidence} / ${follow.evidence}`);
+    const sameStack = bEdges.find((edge) => edgeMatches(edge, supplies, "적", supply.resource));
+    if (sameStack) best.consider(27, `두 공법이 적의 「${supply.resource}」 축적을 같은 대상에 누적`, "offense-stack", supply.resource, `${supply.evidence} / ${sameStack.evidence}`);
+  }
+  for (const supply of bEdges.filter((edge) => edgeMatches(edge, supplies, "적") && edge.valence === "해로운 상태" && isSpecificRelationResource(edge.resource))) {
+    const follow = aEdges.find((edge) => edgeMatches(edge, needs, "적", supply.resource));
+    if (follow) best.consider(52, `이 공법이 적에게 만드는 「${supply.resource}」을 선택 공법이 조건·소모·증폭에 사용`, "offense-chain", supply.resource, `${supply.evidence} / ${follow.evidence}`);
+  }
+
+  const selectedDirection = selectedEffect.tags.includes("전진") ? "전진" : selectedEffect.tags.includes("후진") ? "후진" : null;
+  if (selectedEffect.tags.includes("자동발동") && selectedDirection && candidate.equipType === 2 && candidateEffect.tags.includes(selectedDirection)) {
+    best.consider(45, `${selectedDirection} 신법 이동이 선택 공법의 자동발동 조건을 직접 만든다`, "movement-trigger", selectedDirection, candidateEffect.description || candidateEffect.short.join(" "));
+  }
+  const candidateDirection = candidateEffect.tags.includes("전진") ? "전진" : candidateEffect.tags.includes("후진") ? "후진" : null;
+  if (candidateEffect.tags.includes("자동발동") && candidateDirection && selected.equipType === 2 && selectedEffect.tags.includes(candidateDirection)) {
+    best.consider(43, `선택 신법의 ${candidateDirection} 이동이 이 공법의 자동발동 조건을 직접 만든다`, "movement-trigger", candidateDirection, selectedEffect.description || selectedEffect.short.join(" "));
+  }
+
+  const candidateMakesTrick = bEdges.find((edge) => edgeMatches(edge, supplies, "자신", "식"));
+  const candidateMechanicText = [candidateEffect.description, ...candidateEffect.short, ...candidateEffect.analysis.mechanicAxes, ...candidateEffect.analysis.mechanicLabels].join(" ");
+  const suppliedTrick = selected.combat.trickCost.find((cost) => candidateMechanicText.includes(cost.name) || (cost.nameCn && candidateMechanicText.includes(cost.nameCn)));
+  if (candidateMakesTrick && suppliedTrick) {
+    best.consider(42, `시전에 필요한 「${suppliedTrick.name}」 식을 직접 추가·변환해 준비 시간을 단축`, "trick-supply", suppliedTrick.name, candidateMakesTrick.evidence);
+  }
+  const selectedPoisons = selected.combat.poisons.filter((poison) => !poison.name.includes("등급")).map((poison) => poison.name);
+  const sharedPoison = candidate.combat.poisons.find((poison) => !poison.name.includes("등급") && selectedPoisons.includes(poison.name));
+  if (sharedPoison && selectedEffect.tags.includes("독") && candidateEffect.tags.includes("독")) {
+    best.consider(34, `같은 「${sharedPoison.name}」 축적·발작 계통을 이어 독 발동 조건을 안정화`, "poison-system", sharedPoison.name, candidateEffect.description || candidateEffect.short.join(" "));
+  }
+  const candidateExtendsRange = bEdges.find((edge) => edgeMatches(edge, supplies, "자신", "공격 거리"));
+  if (candidateExtendsRange && selected.combat.maxDistance !== null) {
+    best.consider(34, `선택 공법의 기본 사거리 ${(selected.combat.minDistance ?? 0) / 10}–${selected.combat.maxDistance / 10}를 늘려 무기 거리 상성을 보정`, "range-extension", "공격 거리", candidateExtendsRange.evidence);
+  }
+  if (selectedEffect.analysis.mechanicAxes.includes(candidate.sectNameCn)) {
+    best.consider(44, `효과가 지정한 「${candidate.sectName}」 공법이라 위력·상한 보정을 직접 받음`, "sect-rule", candidate.sectName, selectedEffect.description || selectedEffect.short.join(" "));
+  }
+  const candidateWeaponNameCn = candidate.combat.fixedWeaponNameCn || candidate.combat.recommendedWeaponNameCn;
+  if (candidateWeaponNameCn && selectedEffect.analysis.mechanicAxes.includes(candidateWeaponNameCn)) {
+    best.consider(44, `효과가 지정한 무기 「${candidate.combat.fixedWeaponName || candidate.combat.recommendedWeaponName}」를 사용하는 공법`, "weapon-rule", candidate.combat.fixedWeaponName || candidate.combat.recommendedWeaponName, selectedEffect.description || selectedEffect.short.join(" "));
+  }
+  return best.result();
+}
+
+function evaluateCounter(selected, selectedMode, candidate, candidateMode) {
+  const selectedEffect = effectFor(selected, selectedMode);
+  const candidateEffect = effectFor(candidate, candidateMode);
+  const aEdges = selectedEffect.analysis.semanticEdges;
+  const bEdges = candidateEffect.analysis.semanticEdges;
+  const best = bestRelationCandidate();
+  const inverse = ["clears", "reduces", "prevents", "consumes"];
+  const supplies = ["produces", "amplifies"];
+
+  for (const output of aEdges.filter((edge) => edgeMatches(edge, supplies, "적") && edge.valence === "해로운 상태" && isSpecificRelationResource(edge.resource))) {
+    const defense = bEdges.find((edge) => edgeMatches(edge, inverse, "자신", output.resource));
+    if (defense) best.consider(52, `선택 공법이 적에게 만드는 「${output.resource}」을 자신에게서 제거·감소·차단`, "defensive-inverse", output.resource, `${output.evidence} / ${defense.evidence}`);
+  }
+  for (const benefit of aEdges.filter((edge) => edgeMatches(edge, supplies, "자신") && edge.valence === "이로운 상태" && isSpecificRelationResource(edge.resource))) {
+    const denial = bEdges.find((edge) => edgeMatches(edge, inverse, "적", benefit.resource));
+    if (denial) best.consider(54, `선택 공법이 자신에게 부여하는 「${benefit.resource}」을 적에게서 제거·감소·차단`, "buff-denial", benefit.resource, `${benefit.evidence} / ${denial.evidence}`);
+  }
+  for (const requirement of aEdges.filter((edge) => edgeMatches(edge, ["requires", "consumes"], "자신") && edge.valence === "이로운 상태" && isSpecificRelationResource(edge.resource))) {
+    const denial = bEdges.find((edge) => edgeMatches(edge, inverse, "적", requirement.resource));
+    if (denial) best.consider(56, `핵심 발동 자원 「${requirement.resource}」을 적에게서 빼앗거나 차단`, "requirement-denial", requirement.resource, `${requirement.evidence} / ${denial.evidence}`);
+  }
+
+  if (selectedEffect.tags.includes("현재부상만")) {
+    const oldInjury = bEdges.find((edge) => edgeMatches(edge, supplies, "적", "오래된 부상"));
+    if (oldInjury) best.consider(64, "회복 대상에서 제외되는 오래된 부상을 적에게 만들어 현재 부상 정화·불사 루프를 우회", "old-injury-bypass", "오래된 부상", oldInjury.evidence);
+  }
+  if (selected.combat.maxDistance !== null && candidate.equipType === 1 && candidate.combat.maxDistance !== null && candidate.combat.maxDistance >= selected.combat.maxDistance + 20) {
+    best.consider(30 + Math.min(10, Math.floor((candidate.combat.maxDistance - selected.combat.maxDistance) / 10)), `${candidate.combat.maxDistance / 10} 거리에서 공격해 선택 공법의 ${selected.combat.maxDistance / 10} 최대 사거리 밖을 유지`, "range-control", "공격 거리", `${candidate.combat.fixedWeaponName || candidate.combat.recommendedWeaponName || candidate.typeName} · ${candidate.combat.maxDistance / 10}`);
+  }
+  return best.result();
+}
+
+function buildRelations(selected, selectedMode, evaluator, minimumScore) {
+  const relations = [];
+  for (const candidate of skills) {
+    if (candidate.id === selected.id) continue;
+    let best = null;
+    for (const candidateMode of ["direct", "reverse"]) {
+      const result = evaluator(selected, selectedMode, candidate, candidateMode);
+      if (result && result.score >= minimumScore && result.score > (best?.score || 0)) best = { ...result, skillId: candidate.id, mode: candidateMode };
+    }
+    if (best) relations.push(best);
+  }
+  return relations.sort((a, b) => b.score - a.score || a.skillId - b.skillId).slice(0, 8);
+}
+
+for (const skill of skills) {
+  skill.relations = {};
+  for (const mode of ["direct", "reverse"]) {
+    const synergy = buildRelations(skill, mode, evaluateSynergy, 27);
+    const counter = buildRelations(skill, mode, evaluateCounter, 30);
+    relationAudit.synergyCount += synergy.length;
+    relationAudit.counterCount += counter.length;
+    relationAudit.missingEvidenceCount += [...synergy, ...counter].filter((relation) => !relation.evidence).length;
+    skill.relations[mode] = { synergy, counter };
+  }
+}
+
 const allAnalyses = skills.flatMap((skill) => [skill.direct.analysis, skill.reverse.analysis]);
+relationAudit.rejectedOpponentHealingEdges = allAnalyses.reduce((sum, analysis) => sum + analysis.semanticEdges.filter((edge) =>
+  edge.confidence >= 2
+  && ["clears", "reduces", "prevents", "consumes"].includes(edge.verb)
+  && edge.target === "적"
+  && edge.valence === "해로운 상태"
+).length, 0);
 const countUnique = (field) => new Set(allAnalyses.flatMap((analysis) => analysis[field])).size;
 const digest = createHash("sha256");
 for (const path of [sharedDll, gameDll, clientDll, join(languageKo, "CombatSkill_language.txt"), join(languageKo, "SpecialEffect_language.txt")]) {
@@ -729,7 +977,7 @@ for (const path of [sharedDll, gameDll, clientDll, join(languageKo, "CombatSkill
 
 const payload = {
   meta: {
-    schemaVersion: 2,
+    schemaVersion: 3,
     extractedAt: new Date().toISOString(),
     sourceHash: digest.digest("hex"),
     gameRootName: basename(gameRoot),
@@ -749,7 +997,9 @@ const payload = {
       affectedFieldCount: affectedFields.length,
       weaponCount: weapons.length,
       trickTypeCount: tricks.length,
+      semanticEdgeCount: allAnalyses.reduce((sum, analysis) => sum + analysis.semanticEdges.length, 0),
     },
+    relationAudit,
   },
   tricks,
   weapons,

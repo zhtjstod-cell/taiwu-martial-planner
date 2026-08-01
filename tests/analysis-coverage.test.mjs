@@ -12,6 +12,7 @@ test("extraction contains the full current martial-art table", () => {
 
 test("released-game loadout geometry is extracted from the client", () => {
   assert.deepEqual(data.ui.maxSlotCounts, [9, 9, 9, 9, 9]);
+  assert.deepEqual(data.ui.initialSlotCounts, [6, 1, 1, 1, 1, 0]);
   assert.equal(data.ui.totalSlotCount, 45);
   assert.deepEqual(data.ui.slotVisualSize, { width: 186, height: 200 });
   assert.equal(data.ui.supportsGenericGridAllocation, true);
@@ -27,13 +28,55 @@ test("every described effect retains a dynamic mechanic axis", () => {
 
 test("every effect receives inherited code logic instead of one-off exceptions", () => {
   const effects = data.skills.flatMap((skill) => [skill.direct, skill.reverse]);
-  assert.equal(data.meta.schemaVersion, 2);
+  assert.equal(data.meta.schemaVersion, 3);
   assert.ok(data.meta.analysisStats.codeLogicOperationCount > 8000);
   assert.ok(data.meta.analysisStats.codeLogicConditionCount > 4000);
   assert.ok(effects.every((effect) => {
     const logic = effect.analysis.logic;
     return logic && (logic.events.length || logic.conditions.length || logic.operations.length || logic.affectedFields.length);
   }));
+});
+
+test("official Korean names and mastery slot trade-offs come from game data", () => {
+  assert.deepEqual([...new Set(data.skills.map((skill) => skill.equipName))].sort(), ["경령", "기교", "내공", "파괴", "호체"]);
+  assert.equal(data.skills.find((skill) => skill.id === 1).typeName, "신법");
+  assert.equal(data.skills.find((skill) => skill.sect === 5).sectName, "원산파");
+  assert.ok(data.skills.every((skill) => skill.masteredGridCost === Math.max(skill.gridCost - 1, 1)));
+  assert.ok(data.skills.filter((skill) => skill.equipType === 0).every((skill) => skill.specificGrids.length <= 4 && Number.isInteger(skill.genericGrid)));
+});
+
+test("every recommendation has a target-aware causal proof", () => {
+  const harmful = new Set(["직접 피해", "피해", "외상", "내상", "중상", "부상", "오래된 부상", "파열", "봉혈", "실신", "필사 표식", "패배 표식", "독", "독 등급", "고독", "내식 문란", "약화 상태", "봉금", "무기 내구도"]);
+  const inverse = new Set(["clears", "reduces", "prevents", "consumes"]);
+  const byId = new Map(data.skills.map((skill) => [skill.id, skill]));
+  assert.equal(data.meta.relationAudit.missingEvidenceCount, 0);
+  assert.ok(data.meta.relationAudit.rejectedOpponentHealingEdges > 0);
+  for (const selected of data.skills) {
+    for (const selectedMode of ["direct", "reverse"]) {
+      for (const relation of selected.relations[selectedMode].counter) {
+        assert.ok(relation.evidence && relation.reason && relation.basis);
+        const candidate = byId.get(relation.skillId);
+        const candidateEdges = candidate[relation.mode].analysis.semanticEdges;
+        if (relation.basis === "defensive-inverse") {
+          assert.ok(candidateEdges.some((edge) => inverse.has(edge.verb) && edge.target === "자신" && edge.resource === relation.resource));
+        } else if (["buff-denial", "requirement-denial"].includes(relation.basis)) {
+          assert.ok(candidateEdges.some((edge) => inverse.has(edge.verb) && edge.target === "적" && edge.resource === relation.resource && !harmful.has(edge.resource)));
+        } else if (relation.basis === "old-injury-bypass") {
+          assert.ok(candidateEdges.some((edge) => ["produces", "amplifies"].includes(edge.verb) && edge.target === "적" && edge.resource === "오래된 부상"));
+        } else {
+          assert.equal(relation.basis, "range-control");
+        }
+      }
+    }
+  }
+});
+
+test("enemy healing is never reinterpreted as a counter", () => {
+  const harmful = new Set(["직접 피해", "피해", "외상", "내상", "중상", "부상", "오래된 부상", "파열", "봉혈", "실신", "필사 표식", "패배 표식", "독", "독 등급", "고독", "내식 문란", "약화 상태", "봉금", "무기 내구도"]);
+  const inverse = new Set(["clears", "reduces", "prevents", "consumes"]);
+  const invalidEdges = data.skills.flatMap((skill) => [skill.direct, skill.reverse]).flatMap((effect) => effect.analysis.semanticEdges)
+    .filter((edge) => inverse.has(edge.verb) && edge.target === "적" && harmful.has(edge.resource));
+  assert.equal(invalidEdges.length, data.meta.relationAudit.rejectedOpponentHealingEdges);
 });
 
 test("tooltip-omitted old-injury behavior remains one automatically detected case", () => {

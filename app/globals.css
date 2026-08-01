@@ -174,3 +174,120 @@ h1 { font-size: 18px; } h2 { font-size: 18px; }
   .workspace { display: flex; flex-direction: column; padding: 7px; overflow: visible; }.library-panel { height: 420px; }.board-panel { min-height: 650px; }.analysis-panel { display: block; max-height: none; }
   .statusbar { height: 28px; }.statusbar span:nth-child(2) { display: none; }
 }
+
+/* Extracted in-game art and fixed three-panel planner layout. */
+.app-shell { height: 100vh; min-height: 640px; overflow: hidden; }
+.workspace {
+  overflow: hidden;
+  grid-template-columns: minmax(220px, 22vw) minmax(420px, 1fr) minmax(290px, 29vw);
+}
+.library-panel, .board-panel, .analysis-panel { height: 100%; min-height: 0; position: relative; }
+.library-panel { overflow: hidden; }
+.skill-list { min-height: 0; }
+.skill-row { grid-template-columns: 12px 31px minmax(0, 1fr) auto auto 25px; padding: 6px 5px; }
+.skill-row:focus-visible, .relation-card:focus-visible { outline: 1px solid var(--jade); outline-offset: -1px; }
+.drag-handle { color: #4d5047; cursor: grab; }
+.skill-row:active .drag-handle { cursor: grabbing; color: var(--gold); }
+.quick-add {
+  width: 24px; height: 24px; display: grid; place-items: center; flex: 0 0 auto;
+  border: 1px solid #48584f; background: #1c2822; color: #91bea7; cursor: pointer;
+}
+.quick-add:hover { border-color: #7baa92; background: #31493d; color: #d6ebdf; }
+.skill-seal {
+  border-radius: 0; border: 0; background-color: transparent; background-repeat: no-repeat;
+  background-size: contain; background-position: center; box-shadow: none; filter: drop-shadow(0 2px 3px rgba(0,0,0,.55));
+}
+.skill-seal.small { box-shadow: none; }
+
+.board-panel { overflow: auto; scrollbar-width: thin; scrollbar-color: #45483d #181915; }
+.cultivation-layout {
+  min-width: 0; width: 100%; flex: 1 0 500px; grid-template-columns: minmax(145px, 27%) minmax(410px, 1fr);
+  background-image: linear-gradient(90deg, rgba(12,15,13,.24), rgba(9,12,10,.62)), url('/game-ui/combatskill-ui/charactermenu3_19_beijingyinhua.png');
+  background-repeat: no-repeat, repeat; background-size: auto, 380px auto;
+}
+.practitioner-core { overflow: hidden; }
+.original-yuanpan {
+  position: absolute; width: min(245px, 96%); aspect-ratio: 1; left: 50%; top: 50%; transform: translate(-50%,-50%);
+  background: url('/game-ui/combatskill-ui/charactermenu3_21_yuanpan.png') center/contain no-repeat;
+  opacity: .82; filter: drop-shadow(0 8px 18px rgba(0,0,0,.65));
+}
+.meditation-mark { width: 84px; height: 84px; padding-bottom: 8px; }
+.meditation-mark .head { top: 14px; }.meditation-mark .body { top: 34px; }
+.core-elements { width: 176px; height: 176px; }
+.core-elements i:nth-child(1){left:76px}.core-elements i:nth-child(2){top:51px}.core-elements i:nth-child(3){right:26px}.core-elements i:nth-child(4){left:25px}.core-elements i:nth-child(5){top:51px}
+.loadout-board { width: 100%; min-width: 0; }
+.loadout-lane { grid-template-columns: 112px minmax(0, 1fr); }
+.lane-energy { grid-template-columns: 42px minmax(0,1fr); padding: 6px; gap: 6px; }
+.qi-orb {
+  background-color: transparent; background-repeat: no-repeat; background-size: contain; background-position: center;
+  border: 0; border-radius: 0; box-shadow: none; position: relative; filter: drop-shadow(0 2px 4px rgba(0,0,0,.6));
+}
+.qi-orb small { position: absolute; left: 50%; bottom: -2px; transform: translateX(-50%); padding: 1px 4px; border: 1px solid #3b463f; background: #111713; white-space: nowrap; }
+.grid-adjust { grid-column: 1 / -1; display: grid; grid-template-columns: 20px 1fr 20px; align-items: center; gap: 3px; }
+.grid-adjust button, .mastery-mini, .remove-skill {
+  border: 1px solid #4a5047; background: rgba(16,19,17,.86); color: #8f9c91; cursor: pointer; padding: 0;
+}
+.grid-adjust button { width: 20px; height: 18px; display: grid; place-items: center; }
+.grid-adjust button:disabled { opacity: .25; cursor: default; }
+.grid-adjust b { text-align: center; color: #c2a96b; font: 9px monospace; font-weight: 500; }
+.grid-cell { background-repeat: no-repeat; background-size: 100% 100%; background-position: center; }
+.grid-cell.available { border-color: color-mix(in srgb,var(--lane) 48%, #2e3933); }
+.grid-cell.locked { opacity: .24; filter: grayscale(1); }
+.grid-cell.generic::after { content: '萬'; position: absolute; inset: 1px; display: grid; place-items: center; color: rgba(194,169,107,.35); font: 11px SimSun,serif; }
+.equipped-card {
+  border-color: color-mix(in srgb,var(--lane) 75%, #b8c9c0);
+  background-image: linear-gradient(90deg, rgba(18,25,21,.88), rgba(18,25,21,.58)), var(--card-art);
+  background-repeat: no-repeat; background-size: cover; background-position: center;
+}
+.equipped-card.reverse { background-image: linear-gradient(90deg, rgba(68,34,31,.9), rgba(43,29,27,.62)), var(--card-art); }
+.equipped-card.invalid { border-color: #833f39; filter: grayscale(.72); opacity: .5; box-shadow: inset 0 -3px #8e3d36; }
+.mastery-mini { width: 18px; height: 18px; flex: 0 0 auto; font: 10px SimSun,serif; }
+.mastery-mini.active { border-color: #b69a56; color: #edd595; background: #4a3d20; }
+.remove-skill { width: 18px; height: 18px; display: grid; place-items: center; flex: 0 0 auto; margin-left: 0; }
+.empty-hint { grid-column: 1 / -1; justify-self: center; }
+
+.analysis-panel { overflow: hidden; padding: 0; display: grid; grid-template-rows: minmax(0, auto) minmax(170px, 1fr); }
+.analysis-summary { min-height: 0; max-height: 55vh; overflow: auto; scrollbar-width: thin; scrollbar-color: #45483d #181915; }
+.selected-header { min-height: 76px; padding: 9px 12px; position: sticky; top: 0; z-index: 3; background: linear-gradient(110deg, rgba(43,62,52,.98), rgba(25,26,22,.98) 70%); }
+.selected-header h2 { font-size: 18px; }
+.mode-switch { margin: 7px 10px 6px; }
+.mastery-toggle {
+  margin: 0 10px 7px; width: calc(100% - 20px); border: 1px solid #4a4637; background: #1a1a15; padding: 7px 9px;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; text-align: left; cursor: pointer;
+}
+.mastery-toggle b { color: #bca66c; font-size: 9px; }.mastery-toggle span { color: #777466; font-size: 8px; }
+.mastery-toggle.active { border-color: #9b7f3e; background: rgba(111,86,33,.18); }.mastery-toggle.active span { color: #c8ae69; }
+.effect-card { margin: 0 10px 7px; padding: 9px; }
+.effect-card p { margin: 7px 0; line-height: 1.55; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.logic-summary { cursor: pointer; }
+.logic-heading { list-style: none; }.logic-heading::-webkit-details-marker { display: none; }
+.combat-conditions { margin: 0 10px 7px; }
+.condition-row { padding: 6px; }
+.equip-button { margin: 0 10px 8px; width: calc(100% - 20px); padding: 7px; }
+.relation-section { min-height: 0; overflow: hidden; display: grid; grid-template-rows: auto minmax(0, 1fr); border-top: 1px solid #39392f; }
+.relation-tabs { position: sticky; top: 0; z-index: 2; }
+.relation-list { min-height: 0; overflow: auto; scrollbar-width: thin; scrollbar-color: #45483d #181915; padding: 5px 7px; }
+.relation-card { grid-template-columns: 20px 31px minmax(0,1fr) 25px 14px; }
+.relation-copy strong { min-width: 0; }.relation-copy strong > i { margin-left: auto; color: #8e7f58; font-size: 7px; font-style: normal; white-space: nowrap; }
+.relation-card > .quick-add { width: 23px; height: 23px; }
+
+@media (max-width: 1260px) {
+  .workspace { grid-template-columns: minmax(210px, 23vw) minmax(400px, 1fr) minmax(280px, 30vw); overflow-x: auto; }
+  .cultivation-layout { grid-template-columns: 1fr; min-width: 400px; }
+  .practitioner-core { display: none; }
+  .loadout-board { align-self: center; }
+  .topbar-stats > span:nth-child(2) { display: none; }
+}
+@media (max-width: 1120px) {
+  .workspace { grid-template-columns: 220px minmax(400px, 1fr) 290px; overflow-x: auto; }
+  .analysis-panel { grid-column: auto; max-height: none; display: grid; grid-template-columns: 1fr; }
+  .analysis-panel .selected-header, .analysis-panel .mode-switch, .analysis-panel .effect-card, .analysis-panel .equip-button,
+  .analysis-panel .relation-tabs, .analysis-panel .relation-list { grid-column: auto; grid-row: auto; }
+}
+@media (max-width: 760px) {
+  .app-shell { height: auto; min-height: 100vh; overflow: visible; display: block; }
+  .workspace { display: flex; overflow: visible; }
+  .library-panel { height: 420px; }.board-panel { height: 650px; }.analysis-panel { height: 720px; display: grid; }
+  .cultivation-layout { min-width: 560px; }
+  .statusbar { display: none; }
+}

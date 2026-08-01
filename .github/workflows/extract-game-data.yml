@@ -23,6 +23,11 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0.x"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install UI extraction runtime
+        run: python -m pip install UnityPy==1.25.0
       - name: Install ILSpy command line
         shell: powershell
         run: |
@@ -36,12 +41,17 @@ jobs:
           TAIWU_GAME_DIR: ${{ inputs.game_directory || vars.TAIWU_GAME_DIR || 'H:\SteamLibrary\steamapps\common\The Scroll Of Taiwu' }}
           ILSPYCMD: ilspycmd
         run: node extractor/extract.mjs
+      - name: Extract current in-game UI art
+        shell: powershell
+        run: python extractor/extract-ui-assets.py --game "$env:TAIWU_GAME_DIR" --out public/game-ui
+        env:
+          TAIWU_GAME_DIR: ${{ inputs.game_directory || vars.TAIWU_GAME_DIR || 'H:\SteamLibrary\steamapps\common\The Scroll Of Taiwu' }}
       - name: Commit changed dataset
         shell: powershell
         run: |
           git config user.name "taiwu-data-bot"
           git config user.email "taiwu-data-bot@users.noreply.github.com"
-          git add app/data/combat-skills.json
+          git add app/data/combat-skills.json public/game-ui
           if (-not (git diff --cached --quiet)) {
             git commit -m "data: refresh Taiwu martial arts"
             git push
