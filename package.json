@@ -9,6 +9,8 @@
     "dev": "vinext dev",
     "build": "vinext build",
     "build:pages": "npm run build && node scripts/prepare-pages.mjs",
+    "pages:deploy": "npm run build:pages && wrangler pages deploy .pages-deploy --project-name taiwu-mugongjin --branch main && npm run pages:verify",
+    "pages:verify": "node scripts/verify-pages-deployment.mjs",
     "pages:upload-assets": "node scripts/upload-pages-assets.mjs .pages-deploy .wrangler/pages-manifest.json",
     "release:extractor": "node scripts/build-extractor-release.mjs",
     "start": "vinext start",

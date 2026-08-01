@@ -64,8 +64,10 @@ ILSpy CLI는 `--ilspy` 또는 `ILSPYCMD`로 지정할 수 있습니다. 배포 �
 
 ```powershell
 npm run cf:types
-npm run build:pages
+npm run pages:deploy
 ```
+
+`pages:deploy`는 사이트와 `_worker.js`를 하나의 Pages 배포로 올린 다음 `/api/reports`, `/api/strategies`, 존재하지 않는 API 경로의 응답이 실제 JSON인지 검사합니다. API가 `index.html`로 폴백되거나 상태·응답 구조가 다르면 명령이 실패하므로 그 상태를 정상 배포로 넘기지 않습니다. `pages:upload-assets`는 인증된 저수준 배포 작업을 위한 정적 자산 업로드 단계일 뿐이며 단독 배포 명령으로 사용하지 않습니다.
 
 Pages 프로젝트의 프로덕션 브랜치는 `main`, 호환성 날짜는 `2026-08-01`, 플래그는 `nodejs_compat`입니다. 배포 전 `drizzle/0000_dry_lethal_legion.sql`을 D1에 적용해야 합니다.
 

@@ -1,6 +1,40 @@
 import assert from "node:assert/strict";
 import { readFile, stat } from "node:fs/promises";
 import test from "node:test";
+import { verifyDeployment } from "../scripts/verify-pages-deployment.mjs";
+
+test("Pages deployment command uploads the Worker and then verifies API JSON", async () => {
+  const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  const command = packageJson.scripts["pages:deploy"];
+  assert.match(command, /build:pages/);
+  assert.match(command, /wrangler pages deploy \.pages-deploy/);
+  assert.match(command, /pages:verify/);
+  assert.ok(command.indexOf("wrangler pages deploy") < command.indexOf("pages:verify"));
+});
+
+test("post-deploy verification rejects an HTML fallback on an API route", async () => {
+  await assert.rejects(
+    verifyDeployment({
+      attempts: 1,
+      fetchImpl: async () => new Response("<html>fallback</html>", { status: 200, headers: { "content-type": "text/html" } }),
+    }),
+    /expected application\/json/,
+  );
+});
+
+test("post-deploy verification accepts the Worker API contract", async () => {
+  const results = await verifyDeployment({
+    attempts: 1,
+    fetchImpl: async (url) => {
+      const path = new URL(url).pathname;
+      if (path === "/api/reports") return Response.json({ reports: [] });
+      if (path === "/api/strategies") return Response.json({ strategies: [] });
+      if (path === "/api/not-a-route") return Response.json({ error: "Not found" }, { status: 404 });
+      return new Response("<!doctype html><title>태오회권 무공진</title>", { headers: { "content-type": "text/html; charset=utf-8" } });
+    },
+  });
+  assert.equal(results.length, 4);
+});
 
 test("Cloudflare Pages staging is static, small, and privacy-safe", async () => {
   const html = await readFile(new URL("../.pages-deploy/index.html", import.meta.url), "utf8");
