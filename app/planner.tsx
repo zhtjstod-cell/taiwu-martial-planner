@@ -19,7 +19,20 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import rawData from "./data/combat-skills.json";
+import rawManifest from "./data/combat-skills.json";
+import rawSkills0 from "./data/combat-skills-0.json";
+import rawSkills1 from "./data/combat-skills-1.json";
+import rawSkills2 from "./data/combat-skills-2.json";
+import rawSkills3 from "./data/combat-skills-3.json";
+import rawSkills4 from "./data/combat-skills-4.json";
+import rawSkills5 from "./data/combat-skills-5.json";
+import rawSkills6 from "./data/combat-skills-6.json";
+import rawSkills7 from "./data/combat-skills-7.json";
+
+const rawData = {
+  ...rawManifest,
+  skills: [...rawSkills0, ...rawSkills1, ...rawSkills2, ...rawSkills3, ...rawSkills4, ...rawSkills5, ...rawSkills6, ...rawSkills7],
+};
 
 type Mode = "direct" | "reverse";
 type SemanticEdge = {

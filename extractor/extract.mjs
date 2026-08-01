@@ -1008,5 +1008,14 @@ const payload = {
   skills,
 };
 
-writeFileSync(outputFile, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+const shardCount = 8;
+const shardSize = Math.ceil(skills.length / shardCount);
+const outputStem = outputFile.endsWith(".json") ? outputFile.slice(0, -5) : outputFile;
+const manifest = { ...payload, meta: { ...payload.meta, skillShardCount: shardCount } };
+delete manifest.skills;
+writeFileSync(outputFile, `${JSON.stringify(manifest)}\n`, "utf8");
+for (let shardIndex = 0; shardIndex < shardCount; shardIndex += 1) {
+  const shard = skills.slice(shardIndex * shardSize, (shardIndex + 1) * shardSize);
+  writeFileSync(`${outputStem}-${shardIndex}.json`, `${JSON.stringify(shard)}\n`, "utf8");
+}
 console.log(`추출 완료: ${skills.length}개 무공 -> ${outputFile}`);

@@ -51,7 +51,7 @@ jobs:
         run: |
           git config user.name "taiwu-data-bot"
           git config user.email "taiwu-data-bot@users.noreply.github.com"
-          git add app/data/combat-skills.json public/game-ui
+          git add app/data public/game-ui
           if (-not (git diff --cached --quiet)) {
             git commit -m "data: refresh Taiwu martial arts"
             git push

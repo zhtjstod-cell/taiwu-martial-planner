@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const data = JSON.parse(await readFile(new URL("../app/data/combat-skills.json", import.meta.url), "utf8"));
+const manifest = JSON.parse(await readFile(new URL("../app/data/combat-skills.json", import.meta.url), "utf8"));
+const skillShards = await Promise.all(Array.from({ length: manifest.meta.skillShardCount }, async (_, index) =>
+  JSON.parse(await readFile(new URL(`../app/data/combat-skills-${index}.json`, import.meta.url), "utf8"))
+));
+const data = { ...manifest, skills: skillShards.flat() };
 
 test("extraction contains the full current martial-art table", () => {
   assert.equal(data.meta.skillCount, data.skills.length);
