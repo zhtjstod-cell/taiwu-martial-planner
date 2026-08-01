@@ -1,0 +1,40 @@
+name: Extract Taiwu martial arts
+
+on:
+  workflow_dispatch:
+    inputs:
+      game_directory:
+        description: "Self-hosted Windows runner의 태오 설치 경로"
+        required: true
+        default: "H:\\SteamLibrary\\steamapps\\common\\The Scroll Of Taiwu"
+
+jobs:
+  extract:
+    runs-on: [self-hosted, Windows]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Install ILSpy command line
+        run: dotnet tool install --global ilspycmd
+      - name: Extract current game data
+        env:
+          TAIWU_GAME_DIR: ${{ inputs.game_directory }}
+          ILSPYCMD: ilspycmd
+        run: node extractor/extract.mjs
+      - name: Commit changed dataset
+        shell: powershell
+        run: |
+          git config user.name "taiwu-data-bot"
+          git config user.email "taiwu-data-bot@users.noreply.github.com"
+          git add app/data/combat-skills.json
+          if (-not (git diff --cached --quiet)) {
+            git commit -m "data: refresh Taiwu martial arts"
+            git push
+          }
