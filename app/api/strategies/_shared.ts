@@ -26,10 +26,11 @@ export function validateTitle(value: unknown) {
 export async function visitorHash(request: Request) {
   const headers = request.headers;
   const ip = headers.get("cf-connecting-ip") || headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "local";
-  const workerEnv = (globalThis as typeof globalThis & { __TAIWU_WORKER_ENV__?: Record<string, unknown> }).__TAIWU_WORKER_ENV__;
-  const secret = String(workerEnv?.VOTE_HMAC_SECRET || "local-development-only");
-  const bytes = new TextEncoder().encode(`${secret}\u0000${ip}`);
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  const { env } = await import("cloudflare:workers");
+  const secret = String((env as Cloudflare.Env & { VOTE_HMAC_SECRET?: string }).VOTE_HMAC_SECRET || "local-development-only");
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const digest = await crypto.subtle.sign("HMAC", key, encoder.encode(ip));
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 

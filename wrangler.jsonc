@@ -1,0 +1,14 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "taiwu-mugongjin",
+  "pages_build_output_dir": "./.pages-deploy",
+  "compatibility_date": "2026-08-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "taiwu-mugongjin-db",
+      "database_id": "902624a8-d8e3-4bb0-9c1b-1259ca96d3de"
+    }
+  ]
+}

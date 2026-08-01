@@ -682,7 +682,9 @@ function detectTags(text, code) {
 }
 
 const equipNames = Array.from({ length: 5 }, (_, index) => uiKo.get(`LK_CombatSkill_EquipType_${index}`) || ["내공", "파괴", "경령", "호체", "기교"][index]);
-const elementNames = ["금", "목", "수", "화", "토", "혼원"];
+// CombatSkillConfig.FiveElements uses the game's internal-energy schools,
+// not the literal metal/wood/water/fire/earth labels.
+const elementNames = ["금강", "자하", "현음", "순양", "귀원", "혼원"];
 
 const skills = [];
 for (const call of extractCalls(combatSource, "CombatSkillItem")) {

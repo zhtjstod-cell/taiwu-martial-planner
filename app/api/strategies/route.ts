@@ -5,7 +5,7 @@ import { errorResponse, validatePlan, validateTitle, visitorHash } from "./_shar
 
 export async function GET() {
   try {
-    const db = getDb();
+    const db = await getDb();
     const voteCount = count(strategyVotes.id);
     const rows = await db.select({
       id: strategyBuilds.id,
@@ -33,7 +33,7 @@ export async function POST(request: Request) {
     if (!plan.equipped.length) throw new Error("무공을 하나 이상 배치해 주세요.");
     const datasetVersion = typeof body.datasetVersion === "string" ? body.datasetVersion.slice(0, 160) : "unknown";
     const authorHash = await visitorHash(request);
-    const db = getDb();
+    const db = await getDb();
     const recent = await db.select({ id: strategyBuilds.id }).from(strategyBuilds)
       .where(and(eq(strategyBuilds.authorHash, authorHash), gte(strategyBuilds.createdAt, Math.floor(Date.now() / 1000) - 60)))
       .limit(1);

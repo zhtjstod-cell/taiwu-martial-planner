@@ -22,6 +22,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import rawManifest from "./data/combat-skills.json";
 import rawSkills0 from "./data/combat-skills-0.json";
 import rawSkills1 from "./data/combat-skills-1.json";
@@ -220,7 +221,18 @@ function computeLayout(plan: Plan, skills: Skill[], uiProfile: UiProfile) {
 function SkillSeal({ skill, small = false, icons }: { skill: Skill; small?: boolean; icons?: Record<string, string> }) {
   const iconIndex = Math.max(0, Math.min(89, skill.sect * 6 + skill.element));
   const icon = icons?.[skill.icon] || (skill.icon ? `/game-ui/combatskilliconlegacy/${skill.icon}.png` : "");
-  return <span className={`skill-seal ${small ? "small" : ""}`} style={{ backgroundImage: `${icon ? `url(${icon}), ` : ""}url(/game-ui/combatskilltypeicon/GongFaIcon_${iconIndex}.png)` }} aria-hidden="true" />;
+  const glyphStyle: CSSProperties = icon ? {
+    backgroundColor: "var(--element-color)",
+    WebkitMaskImage: `url("${icon}")`,
+    maskImage: `url("${icon}")`,
+  } : {
+    backgroundImage: `url(/game-ui/combatskilltypeicon/GongFaIcon_${iconIndex}.png)`,
+  };
+  return (
+    <span className={`skill-seal element-${Math.max(0, Math.min(5, skill.element))} ${small ? "small" : ""}`} aria-hidden="true">
+      <span className="skill-glyph" style={glyphStyle} />
+    </span>
+  );
 }
 
 function gradeClass(skill: Skill) {

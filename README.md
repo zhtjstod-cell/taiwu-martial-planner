@@ -50,7 +50,18 @@ ILSpy CLI는 `--ilspy` 또는 `ILSPYCMD`로 지정할 수 있습니다. 로컬�
 
 ## 공략 게시판과 개인정보
 
-공략은 자유 서술 없이 제목과 현재 운공 조합, 추출 데이터 버전만 저장합니다. 추천은 Cloudflare가 전달한 IP를 서버 비밀키와 함께 SHA-256으로 변환한 값으로만 중복을 판단하며 IP 원문은 저장하지 않습니다. 같은 IP는 같은 공략에 한 번만 추천할 수 있고, 등록은 IP당 1분에 한 번으로 제한합니다. 게시판은 Sites의 서버리스 D1을 사용하므로 개발자가 별도 서버를 계속 실행할 필요가 없습니다.
+공략은 자유 서술 없이 제목과 현재 운공 조합, 추출 데이터 버전만 저장합니다. 추천은 Cloudflare가 전달한 IP를 서버 비밀키로 HMAC-SHA-256 처리한 값으로만 중복을 판단하며 IP 원문은 저장하지 않습니다. 같은 IP는 같은 공략에 한 번만 추천할 수 있고, 등록은 IP당 1분에 한 번으로 제한합니다. 게시판은 Cloudflare Pages Functions와 D1을 사용하므로 개발자가 별도 서버를 계속 실행할 필요가 없습니다.
+
+## Cloudflare Pages 배포
+
+공개 사이트는 [taiwu-mugongjin.pages.dev](https://taiwu-mugongjin.pages.dev)에서 동작합니다. `npm run build:pages`는 vinext 클라이언트 빌드에서 정적 HTML을 만들고, `/api/strategies`만 처리하는 작은 Pages Worker를 `.pages-deploy`에 생성합니다. `wrangler.jsonc`의 `DB` 바인딩은 전용 D1을 가리키며 `VOTE_HMAC_SECRET` 값은 Cloudflare의 암호화된 환경 변수에만 저장합니다.
+
+```powershell
+npm run cf:types
+npm run build:pages
+```
+
+Pages 프로젝트의 프로덕션 브랜치는 `main`, 호환성 날짜는 `2026-08-01`, 플래그는 `nodejs_compat`입니다. 배포 전 `drizzle/0000_dry_lethal_legion.sql`을 D1에 적용해야 합니다.
 
 ## 검증
 

@@ -23,5 +23,6 @@ test("server-renders the Taiwu planner", async () => {
   assert.match(html, /만능공법칸/);
   assert.match(html, /데이터 업로드/);
   assert.match(html, /공략 게시판/);
+  for (let element = 0; element <= 5; element += 1) assert.match(html, new RegExp(`skill-seal element-${element}`));
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton/i);
 });

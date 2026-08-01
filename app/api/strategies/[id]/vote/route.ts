@@ -7,7 +7,7 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
   try {
     const id = Number((await context.params).id);
     if (!Number.isInteger(id) || id < 1) throw new Error("공략 번호가 올바르지 않습니다.");
-    const db = getDb();
+    const db = await getDb();
     const exists = await db.select({ id: strategyBuilds.id }).from(strategyBuilds).where(eq(strategyBuilds.id, id)).limit(1);
     if (!exists.length) return Response.json({ error: "공략을 찾을 수 없습니다." }, { status: 404 });
     const voterHash = await visitorHash(_request);
