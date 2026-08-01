@@ -23,6 +23,10 @@ test("server-renders the Taiwu planner", async () => {
   assert.match(html, /만능공법칸/);
   assert.match(html, /데이터 업로드/);
   assert.match(html, /공략 게시판/);
+  assert.match(html, /관계 제보/);
+  assert.match(html, /품 분류/);
+  assert.match(html, /고품 → 저품/);
+  assert.match(html, /조건 없이 간단하게 최대 운공칸에 도달할 수 있습니다/);
   for (let element = 0; element <= 5; element += 1) assert.match(html, new RegExp(`skill-seal element-${element}`));
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton/i);
 });

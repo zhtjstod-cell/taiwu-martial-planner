@@ -36,6 +36,6 @@ export async function visitorHash(request: Request) {
 
 export function errorResponse(error: unknown, fallbackStatus = 400) {
   const message = error instanceof Error ? error.message : "요청을 처리하지 못했습니다.";
-  const databaseMissing = /no such table|strategy_builds|strategy_votes/.test(message);
+  const databaseMissing = /no such table|strategy_builds|strategy_votes|relation_reports/.test(message);
   return Response.json({ error: databaseMissing ? "게시판 데이터베이스 준비 중입니다." : message }, { status: databaseMissing ? 503 : fallbackStatus });
 }

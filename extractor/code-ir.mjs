@@ -42,7 +42,7 @@ const resourceRules = [
   ["표식", /Mark/i],
   ["강화 상태", /Buff|PositiveState/i],
   ["약화 상태", /Debuff|NegativeState/i],
-  ["봉금", /Ban|Seal|Disable/i],
+  ["봉금", /Ban(?:ned|able)?Skill|SealSkill|SilenceSkill|SkillCd/i],
   ["오행", /FiveElement/i],
 ];
 
@@ -144,6 +144,12 @@ function targetFor(text) {
 }
 
 function verbFor(symbol, snippet) {
+  // Queries only discover bannable skills; the actual state change is made by
+  // SilenceSkill/ClearSkillCd. Treating every "Banable" getter as a prevention
+  // operation used to turn unrelated DisableJumpMove calls into false 봉금
+  // counters.
+  if (/^(?:Get|Is|Can|TryGet).*Ban(?:ned|able)?Skill/i.test(symbol)) return null;
+  if (/SilenceSkill|SealSkill/i.test(symbol)) return "produces";
   if (/Subtract/i.test(symbol) && /GetOldInjuries|OldInjur/i.test(snippet)) return "filters";
   if (/Remove|Clear|Erase|Erasure|Delete|Cure|Dispel|Cancel|Clean/i.test(symbol)) return "clears";
   if (/Prevent|Block|Ignore|Immune|Disable|Ban|Seal|Invalid/i.test(symbol)) return "prevents";

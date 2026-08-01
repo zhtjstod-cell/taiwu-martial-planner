@@ -13,8 +13,42 @@ test("Cloudflare Pages staging is static, small, and privacy-safe", async () => 
   assert.doesNotMatch(html, /[a-z0-9-]+\.chatgpt\.site/i);
   assert.ok(workerInfo.size < 25_000, `Pages Worker unexpectedly grew to ${workerInfo.size} bytes`);
   assert.match(worker, /strategy_builds/);
+  assert.match(worker, /relation_reports/);
   assert.match(worker, /cf-connecting-ip/);
   assert.doesNotMatch(worker, /VOTE_HMAC_SECRET\s*[:=]\s*["'][^"']+["']/);
+});
+
+test("Pages relation-report API validates evidence and stores only HMAC-scoped metadata", async () => {
+  const workerUrl = new URL(`../.pages-deploy/_worker.js?reports=${process.pid}-${Date.now()}`, import.meta.url);
+  const { default: worker } = await import(workerUrl.href);
+  const calls = [];
+  const db = {
+    prepare(sql) {
+      const call = { sql, values: [] };
+      calls.push(call);
+      const statement = {
+        bind(...values) { call.values = values; return statement; },
+        async first() { return /INSERT INTO relation_reports/.test(sql) ? { id: 7 } : null; },
+        async all() {
+          return { results: /FROM relation_reports/.test(sql) ? [{ id: 7, relation_type: "counter", subject_skill_id: 580, subject_mode: "direct", related_skill_id: 33, related_mode: "direct", dataset_version: "test", evidence: "봉금 저항으로 공법 차단을 막는다.", created_at: 1 }] : [] };
+        },
+        async run() { return { meta: { changes: 1 } }; },
+      };
+      return statement;
+    },
+  };
+  const env = { DB: db, VOTE_HMAC_SECRET: "test-secret", ASSETS: { fetch: async () => new Response("asset") } };
+  const invalid = await worker.fetch(new Request("https://example.test/api/reports", { method: "POST", headers: { "content-type": "application/json", "cf-connecting-ip": "192.0.2.1" }, body: JSON.stringify({ relationType: "counter", subjectSkillId: 580, subjectMode: "direct", relatedSkillId: 33, relatedMode: "direct", datasetVersion: "test", evidence: "짧음" }) }), env);
+  assert.equal(invalid.status, 400);
+  const created = await worker.fetch(new Request("https://example.test/api/reports", { method: "POST", headers: { "content-type": "application/json", "cf-connecting-ip": "192.0.2.1" }, body: JSON.stringify({ relationType: "counter", subjectSkillId: 580, subjectMode: "direct", relatedSkillId: 33, relatedMode: "direct", datasetVersion: "test", evidence: "봉금 저항으로 공법 차단을 막는다." }) }), env);
+  assert.equal(created.status, 201);
+  const insert = calls.find((call) => /INSERT INTO relation_reports/.test(call.sql));
+  assert.equal(insert.values.length, 8);
+  assert.notEqual(insert.values[7], "192.0.2.1");
+  const listed = await worker.fetch(new Request("https://example.test/api/reports"), env);
+  assert.equal(listed.status, 200);
+  const listedBody = await listed.json();
+  assert.equal(listedBody.reports[0].evidence, "봉금 저항으로 공법 차단을 막는다.");
 });
 
 test("all six internal-energy schools keep their Korean names", async () => {

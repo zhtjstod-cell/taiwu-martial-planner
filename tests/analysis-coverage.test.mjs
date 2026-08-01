@@ -70,6 +70,13 @@ test("every recommendation has a target-aware causal proof", () => {
           assert.ok(candidateEdges.some((edge) => inverse.has(edge.verb) && edge.target === "적" && edge.resource === relation.resource && !harmful.has(edge.resource)));
         } else if (relation.basis === "old-injury-bypass") {
           assert.ok(candidateEdges.some((edge) => ["produces", "amplifies"].includes(edge.verb) && edge.target === "적" && edge.resource === "오래된 부상"));
+        } else if (relation.basis === "element-denial") {
+          assert.ok(candidate[relation.mode].analysis.banControl.deniedElements.includes(selected.elementName));
+        } else if (relation.basis === "element-weakening") {
+          assert.ok(candidate[relation.mode].analysis.banControl.weakenedElements.includes(selected.elementName));
+        } else if (relation.basis === "ban-resistance") {
+          assert.equal(selected[selectedMode].analysis.banControl.creates, true);
+          assert.ok(candidate[relation.mode].analysis.banControl.resists || candidate[relation.mode].analysis.banControl.clears);
         } else {
           assert.equal(relation.basis, "range-control");
         }
@@ -84,6 +91,33 @@ test("enemy healing is never reinterpreted as a counter", () => {
   const invalidEdges = data.skills.flatMap((skill) => [skill.direct, skill.reverse]).flatMap((effect) => effect.analysis.semanticEdges)
     .filter((edge) => inverse.has(edge.verb) && edge.target === "적" && harmful.has(edge.resource));
   assert.equal(invalidEdges.length, data.meta.relationAudit.rejectedOpponentHealingEdges);
+});
+
+test("element-specific 봉금 and weakening generate scoped counters without Disable false positives", () => {
+  const byId = new Map(data.skills.map((skill) => [skill.id, skill]));
+  const expected = new Map([
+    [349, ["금강", "자하", "순양"]],
+    [483, ["귀원", "순양", "현음"]],
+    [580, ["귀원", "자하", "현음"]],
+    [587, ["금강", "순양", "현음"]],
+    [620, ["금강", "귀원", "자하"]],
+  ]);
+  for (const [skillId, elements] of expected) {
+    const skill = byId.get(skillId);
+    assert.deepEqual([...skill.direct.analysis.banControl.deniedElements].sort(), [...elements].sort());
+    assert.deepEqual([...skill.reverse.analysis.banControl.weakenedElements].sort(), [...elements].sort());
+  }
+  const guiYuanSkill = data.skills.find((skill) => skill.elementName === "귀원" && !expected.has(skill.id));
+  assert.ok(guiYuanSkill.relations.direct.counter.some((relation) => relation.skillId === 580 && relation.mode === "direct" && relation.basis === "element-denial"));
+  const falseBanEvidence = data.skills.flatMap((skill) => [skill.direct, skill.reverse]).flatMap((effect) => effect.analysis.semanticEdges)
+    .filter((edge) => edge.resource === "봉금" && /DisableJumpMove/i.test(edge.evidence));
+  assert.deepEqual(falseBanEvidence, []);
+});
+
+test("봉금 sources connect to duration/exploit synergies and real resistance counters", () => {
+  const shinCheok = data.skills.find((skill) => skill.id === 580);
+  assert.ok(shinCheok.relations.direct.synergy.some((relation) => relation.basis === "ban-chain"));
+  assert.ok(shinCheok.relations.direct.counter.some((relation) => relation.basis === "ban-resistance" && [33, 51, 53, 82, 96, 112].includes(relation.skillId)));
 });
 
 test("tooltip-omitted old-injury behavior remains one automatically detected case", () => {

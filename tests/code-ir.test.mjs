@@ -28,3 +28,16 @@ test("code IR records conditions, targets, resources and operations", () => {
   assert.ok(direct.operations.some((operation) => operation.verb === "produces" && operation.resources.includes("독") && operation.target === "자신"));
   assert.ok(reverse.operations.some((operation) => operation.verb === "clears" && operation.resources.includes("독") && operation.target === "적"));
 });
+
+test("봉금 mutation is separated from bannable-skill queries and unrelated Disable calls", () => {
+  const logic = extractCodeLogic(`
+// inheritance:0:BanExample
+void Apply() {
+  var ids = Enemy.GetRandomUnrepeatedBanableSkillIds(Random, 3);
+  Enemy.SilenceSkill(ids[0], 20);
+  base.CombatChar.DisableJumpMove();
+}`, "direct");
+  assert.ok(logic.operations.some((operation) => operation.symbol === "SilenceSkill" && operation.verb === "produces" && operation.resources.includes("봉금") && operation.target === "적"));
+  assert.ok(!logic.operations.some((operation) => operation.symbol === "GetRandomUnrepeatedBanableSkillIds"));
+  assert.ok(!logic.operations.some((operation) => operation.symbol === "DisableJumpMove" && operation.resources.includes("봉금")));
+});

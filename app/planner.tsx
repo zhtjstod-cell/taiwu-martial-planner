@@ -8,11 +8,13 @@ import {
   GitCompareArrows,
   GripVertical,
   Hammer,
+  MessageSquarePlus,
   Minus,
   Plus,
   RotateCcw,
   Ruler,
   Search,
+  Send,
   ShieldCheck,
   Sparkles,
   Swords,
@@ -54,6 +56,15 @@ type Analysis = {
   mechanicLabels: string[];
   affectedFields: string[];
   semanticEdges: SemanticEdge[];
+  banControl?: {
+    creates: boolean;
+    amplifies: boolean;
+    exploits: boolean;
+    clears: boolean;
+    resists: boolean;
+    deniedElements: string[];
+    weakenedElements: string[];
+  };
   logic: {
     events: { label: string }[];
     conditions: { expression: string; resources: string[]; states: string[]; target: string }[];
@@ -101,6 +112,17 @@ type Equipped = { skillId: number; mode: Mode; mastered: boolean };
 type Plan = { equipped: Equipped[]; genericAllocation: number[]; maxSlots: boolean };
 type Relation = RawRelation & { skill: Skill };
 type StrategyEntry = { id: number; title: string; datasetVersion: string; createdAt: number; votes: number; plan: Plan };
+type RelationReportEntry = {
+  id: number;
+  relationType: "synergy" | "counter";
+  subjectSkillId: number;
+  subjectMode: Mode;
+  relatedSkillId: number;
+  relatedMode: Mode;
+  datasetVersion: string;
+  evidence: string;
+  createdAt: number;
+};
 
 type UiProfile = {
   maxSlotCounts: number[];
@@ -146,6 +168,10 @@ const basisNames: Record<string, string> = {
   "requirement-denial": "조건 차단",
   "old-injury-bypass": "오래된 부상 우회",
   "range-control": "거리 통제",
+  "ban-chain": "봉금 연계",
+  "element-denial": "속성 공법 봉금",
+  "element-weakening": "속성 위력 억제",
+  "ban-resistance": "봉금 저항·해제",
 };
 
 function effectFor(skill: Skill, mode: Mode) {
@@ -239,6 +265,30 @@ function gradeClass(skill: Skill) {
   return `grade-${Math.max(1, Math.min(9, skill.grade))}`;
 }
 
+function effectSearchText(effect: Effect) {
+  const analysis = effect.analysis;
+  return [
+    effect.name,
+    effect.description,
+    ...effect.short,
+    ...effect.tags,
+    ...analysis.concepts,
+    ...analysis.triggers,
+    ...analysis.mechanicLabels,
+    ...analysis.affectedFields,
+    ...analysis.semanticEdges.flatMap((edge) => [edge.resource, edge.target, edge.evidence]),
+    ...analysis.logic.events.map((event) => event.label),
+    ...analysis.logic.conditions.flatMap((condition) => [condition.expression, condition.target, ...condition.resources, ...condition.states]),
+    ...analysis.logic.operations.flatMap((operation) => [operation.verb, operation.target, operation.evidence, ...operation.resources]),
+    ...(analysis.banControl?.deniedElements || []),
+    ...(analysis.banControl?.weakenedElements || []),
+  ].join(" ");
+}
+
+function skillSearchText(skill: Skill) {
+  return [skill.name, skill.nameCn, skill.sectName, skill.typeName, skill.equipName, skill.elementName, skill.lore, effectSearchText(skill.direct), effectSearchText(skill.reverse)].join(" ").toLocaleLowerCase("ko");
+}
+
 function openDatasetDb() {
   return new Promise<IDBDatabase>((resolve, reject) => {
     const request = indexedDB.open("taiwu-planner", 1);
@@ -295,8 +345,20 @@ export default function Planner() {
   const [boardLoading, setBoardLoading] = useState(false);
   const [strategyTitle, setStrategyTitle] = useState("");
   const [boardMessage, setBoardMessage] = useState("");
+  const [reportBoardOpen, setReportBoardOpen] = useState(false);
+  const [reports, setReports] = useState<RelationReportEntry[]>([]);
+  const [reportLoading, setReportLoading] = useState(false);
+  const [reportMessage, setReportMessage] = useState("");
+  const [reportType, setReportType] = useState<"synergy" | "counter">("synergy");
+  const [reportSubject, setReportSubject] = useState<{ skillId: number; mode: Mode }>({ skillId: 287, mode: "direct" });
+  const [reportRelatedId, setReportRelatedId] = useState<number | null>(null);
+  const [reportRelatedMode, setReportRelatedMode] = useState<Mode>("direct");
+  const [reportSkillQuery, setReportSkillQuery] = useState("");
+  const [reportEvidence, setReportEvidence] = useState("");
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState<number | "all">("all");
+  const [gradeFilter, setGradeFilter] = useState<number | "all">("all");
+  const [gradeSort, setGradeSort] = useState<"default" | "high" | "low">("default");
   const [selectedId, setSelectedId] = useState(287);
   const [mode, setMode] = useState<Mode>("direct");
   const [analysisTab, setAnalysisTab] = useState<"synergy" | "counter">("synergy");
@@ -316,6 +378,7 @@ export default function Planner() {
   const logicEvents = [...new Set(activeEffect.analysis.logic.events.map((event) => event.label))].slice(0, 3);
   const logicConditions = activeEffect.analysis.logic.conditions.filter((condition) => condition.resources.length || condition.states.length).slice(0, 3);
   const logicOperations = activeEffect.analysis.logic.operations.filter((operation) => operation.resources.some((resource) => resource !== "전투 상태")).slice(0, 5);
+  const searchIndex = useMemo(() => new Map(skills.map((skill) => [skill.id, skillSearchText(skill)])), [skills]);
 
   const updatePlan = (update: (current: Plan) => Plan) => {
     setPlans((current) => current.map((item, index) => index === activePlan ? update(item) : item));
@@ -347,17 +410,28 @@ export default function Planner() {
   }, [plans, storageReady]);
 
   const filtered = useMemo(() => {
-    const normalized = query.trim().toLocaleLowerCase("ko");
-    return skills.filter((skill) => {
+    const terms = query.trim().toLocaleLowerCase("ko").split(/\s+/).filter(Boolean);
+    const matches = skills.filter((skill) => {
       if (category !== "all" && skill.equipType !== category) return false;
-      if (!normalized) return true;
-      return [skill.name, skill.sectName, skill.typeName, skill.equipName, ...skill.direct.tags, ...skill.reverse.tags].join(" ").toLocaleLowerCase("ko").includes(normalized);
+      if (gradeFilter !== "all" && skill.grade !== gradeFilter) return false;
+      const haystack = searchIndex.get(skill.id) || "";
+      return terms.every((term) => haystack.includes(term));
     });
-  }, [query, category, skills]);
+    if (gradeSort === "high") return [...matches].sort((left, right) => left.grade - right.grade || left.id - right.id);
+    if (gradeSort === "low") return [...matches].sort((left, right) => right.grade - left.grade || left.id - right.id);
+    return matches;
+  }, [query, category, gradeFilter, gradeSort, searchIndex, skills]);
+
+  const reportSkillMatches = useMemo(() => {
+    const terms = reportSkillQuery.trim().toLocaleLowerCase("ko").split(/\s+/).filter(Boolean);
+    return skills.filter((skill) => skill.id !== reportSubject.skillId && terms.every((term) => (searchIndex.get(skill.id) || "").includes(term))).slice(0, 10);
+  }, [reportSkillQuery, reportSubject.skillId, searchIndex, skills]);
 
   const relations = (selected.relations?.[mode]?.[analysisTab] || []).map((relation) => ({ ...relation, skill: skills.find((skill) => skill.id === relation.skillId)! })).filter((relation): relation is Relation => Boolean(relation.skill));
   const synergies = selected.relations?.[mode]?.synergy || [];
   const counters = selected.relations?.[mode]?.counter || [];
+  const reportSubjectSkill = skills.find((skill) => skill.id === reportSubject.skillId) || selected;
+  const reportRelatedSkill = reportRelatedId === null ? null : skills.find((skill) => skill.id === reportRelatedId) || null;
 
   const equipSkill = (skill: Skill, targetMode: Mode) => {
     updatePlan((current) => {
@@ -462,6 +536,61 @@ export default function Planner() {
     }
   };
 
+  const loadReports = async () => {
+    setReportLoading(true);
+    try {
+      const response = await fetch("/api/reports", { cache: "no-store" });
+      const body = await response.json().catch(() => ({ error: "관계 제보 API가 응답하지 않습니다." })) as { reports?: RelationReportEntry[]; error?: string };
+      if (!response.ok) throw new Error(body.error || "관계 제보를 불러오지 못했습니다.");
+      setReports(body.reports || []);
+      setReportMessage("");
+    } catch (error) {
+      setReportMessage(error instanceof Error ? error.message : "관계 제보를 불러오지 못했습니다.");
+    } finally {
+      setReportLoading(false);
+    }
+  };
+
+  const openReportBoard = () => {
+    setReportSubject({ skillId: selected.id, mode });
+    setReportRelatedId(null);
+    setReportRelatedMode("direct");
+    setReportSkillQuery("");
+    setReportEvidence("");
+    setReportBoardOpen(true);
+    void loadReports();
+  };
+
+  const publishReport = async () => {
+    if (reportRelatedId === null) return;
+    setReportLoading(true);
+    try {
+      const response = await fetch("/api/reports", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          relationType: reportType,
+          subjectSkillId: reportSubject.skillId,
+          subjectMode: reportSubject.mode,
+          relatedSkillId: reportRelatedId,
+          relatedMode: reportRelatedMode,
+          datasetVersion: meta.datasetVersion || meta.sourceHash.slice(0, 12),
+          evidence: reportEvidence,
+        }),
+      });
+      const body = await response.json().catch(() => ({ error: "관계 제보 API가 응답하지 않습니다." })) as { error?: string };
+      if (!response.ok) throw new Error(body.error || "관계를 제보하지 못했습니다.");
+      setReportEvidence("");
+      setReportMessage("관계와 근거를 등록했습니다.");
+      await loadReports();
+      setReportMessage("관계와 근거를 등록했습니다.");
+    } catch (error) {
+      setReportMessage(error instanceof Error ? error.message : "관계를 제보하지 못했습니다.");
+    } finally {
+      setReportLoading(false);
+    }
+  };
+
   return (
     <main className="app-shell">
       <header className="topbar">
@@ -474,6 +603,7 @@ export default function Planner() {
           <input ref={uploadRef} className="sr-only" type="file" accept=".json,application/json" onChange={(event) => { const file = event.target.files?.[0]; if (file) void importDataset(file); event.currentTarget.value = ""; }} />
           <button className="topbar-action" onClick={() => uploadRef.current?.click()}><UploadCloud size={14} /> 데이터 업로드</button>
           <button className="topbar-action" onClick={openBoard}><Users size={14} /> 공략 게시판</button>
+          <button className="topbar-action" onClick={openReportBoard}><MessageSquarePlus size={14} /> 관계 제보</button>
           {customDataset && <button className="topbar-action subtle" onClick={() => void restoreDataset()}>기본 데이터</button>}
           <button className="icon-button" title="현재 운공안 초기화" aria-label="현재 운공안 초기화" onClick={() => updatePlan(() => blankPlan())}><RotateCcw size={14} /></button>
         </div>
@@ -488,6 +618,10 @@ export default function Planner() {
             <button className={category === "all" ? "active" : ""} onClick={() => setCategory("all")}>전체</button>
             {categoryNames.map((name, index) => <button key={name} className={category === index ? "active" : ""} onClick={() => setCategory(index)}>{name}</button>)}
           </nav>
+          <div className="library-sort">
+            <label><span>품 분류</span><select value={gradeFilter} onChange={(event) => setGradeFilter(event.target.value === "all" ? "all" : Number(event.target.value))}><option value="all">전체 품</option>{Array.from({ length: 9 }, (_, index) => index + 1).map((grade) => <option value={grade} key={grade}>{grade}품</option>)}</select></label>
+            <label><span>정렬</span><select value={gradeSort} onChange={(event) => setGradeSort(event.target.value as "default" | "high" | "low")}><option value="default">기본 순서</option><option value="high">고품 → 저품</option><option value="low">저품 → 고품</option></select></label>
+          </div>
           <div className="skill-list">
             {filtered.map((skill) => (
               <div key={skill.id} className={`skill-row ${selected.id === skill.id ? "selected" : ""}`} role="button" tabIndex={0} draggable
@@ -504,7 +638,7 @@ export default function Planner() {
 
         <section className="board-panel panel">
           <div className="board-heading"><div><span className="eyebrow">운공 프리셋</span><h1>운공 배치</h1></div><div className="legend"><i className="direct-dot" />정련<i className="reverse-dot" />역련</div></div>
-          <div className="game-board-toolbar"><span className="toolbar-label">프리셋</span><div className="plan-tabs">{plans.map((_, index) => <button key={index} className={activePlan === index ? "active" : ""} onClick={() => setActivePlan(index)}>{index + 1}</button>)}</div><button className={`max-slot-toggle ${plan.maxSlots ? "active" : ""}`} onClick={() => updatePlan((current) => ({ ...current, maxSlots: !current.maxSlots }))}><Check size={12} /> 최대 운공칸</button><span className="generic-grid-note">{plan.maxSlots ? <b>계통별 게임 상한 적용</b> : <>만능공법칸 <b>{layout.genericLeft}/{layout.genericPool}</b></>}</span></div>
+          <div className="game-board-toolbar"><span className="toolbar-label">프리셋</span><div className="plan-tabs">{plans.map((_, index) => <button key={index} className={activePlan === index ? "active" : ""} onClick={() => setActivePlan(index)}>{index + 1}</button>)}</div><button className={`max-slot-toggle ${plan.maxSlots ? "active" : ""}`} onClick={() => updatePlan((current) => ({ ...current, maxSlots: !current.maxSlots }))}><Check size={12} /> 최대 운공칸</button><span className="max-slot-help">조건 없이 간단하게 최대 운공칸에 도달할 수 있습니다.</span><span className="generic-grid-note">{plan.maxSlots ? <b>계통별 게임 상한 적용</b> : <>만능공법칸 <b>{layout.genericLeft}/{layout.genericPool}</b></>}</span></div>
           <div className="cultivation-layout">
             <div className="practitioner-core" aria-hidden="true">
               <span className="original-yuanpan" />
@@ -600,6 +734,41 @@ export default function Planner() {
                 <button className="vote-button" onClick={() => void voteStrategy(entry.id)}><ThumbsUp size={14} /><b>{entry.votes}</b></button>
               </article>;
             }) : <div className="strategy-empty"><BookOpenText size={28} /><strong>첫 공략을 등록해 보세요</strong><span>현재 프리셋과 데이터 버전이 함께 저장됩니다.</span></div>}
+          </div>
+        </div>
+      </div>}
+
+      {reportBoardOpen && <div className="board-overlay" role="dialog" aria-modal="true" aria-label="시너지와 카운터 관계 제보 게시판">
+        <div className="relation-board">
+          <header><div><span className="eyebrow">유저 근거 제보</span><h2>시너지·카운터 제보 게시판</h2></div><button className="icon-button" onClick={() => setReportBoardOpen(false)} aria-label="관계 제보 게시판 닫기"><X size={16} /></button></header>
+          {reportMessage && <div className="board-message">{reportMessage}</div>}
+          <div className="report-layout">
+            <form className="report-compose" onSubmit={(event) => { event.preventDefault(); void publishReport(); }}>
+              <div className="report-subject"><SkillSeal skill={reportSubjectSkill} small icons={dataset.assets?.combatSkillIcons} /><span><small>기준 공법 · {reportSubject.mode === "direct" ? "정련" : "역련"}</small><strong className={gradeClass(reportSubjectSkill)}>{reportSubjectSkill.name}</strong></span></div>
+              <div className="report-type" role="group" aria-label="관계 유형"><button type="button" className={reportType === "synergy" ? "active" : ""} onClick={() => setReportType("synergy")}><Sparkles size={13} /> 시너지</button><button type="button" className={reportType === "counter" ? "active counter" : ""} onClick={() => setReportType("counter")}><Swords size={13} /> 카운터</button></div>
+              <label className="report-search"><span>관련 공법 검색</span><input value={reportSkillQuery} onChange={(event) => { setReportSkillQuery(event.target.value); setReportRelatedId(null); }} placeholder="이름·효과·문파 검색" /></label>
+              <div className="report-skill-picker">
+                {reportSkillMatches.map((skill) => <button type="button" key={skill.id} className={reportRelatedId === skill.id ? "active" : ""} onClick={() => { setReportRelatedId(skill.id); setReportSkillQuery(skill.name); }}><SkillSeal skill={skill} small icons={dataset.assets?.combatSkillIcons} /><span><strong className={gradeClass(skill)}>{skill.name}</strong><small>{skill.elementName} · {skill.grade}품 · {skill.typeName}</small></span></button>)}
+              </div>
+              {reportRelatedSkill && <label className="report-mode"><span>관련 공법 수련</span><select value={reportRelatedMode} onChange={(event) => setReportRelatedMode(event.target.value as Mode)}><option value="direct">정련</option><option value="reverse">역련</option></select></label>}
+              <label className="report-evidence"><span>관계 근거</span><textarea maxLength={500} value={reportEvidence} onChange={(event) => setReportEvidence(event.target.value)} placeholder="발동 조건, 대상, 봉금·식·거리처럼 실제로 연결되는 이유를 10자 이상 적어 주세요." /><small>{reportEvidence.trim().length}/500 · 링크와 개인정보는 입력할 수 없습니다.</small></label>
+              <button className="report-submit" type="submit" disabled={reportLoading || !reportRelatedSkill || reportEvidence.trim().length < 10}><Send size={14} /> 근거와 함께 제보</button>
+            </form>
+            <section className="report-feed" aria-label="최근 관계 제보">
+              <header><strong>최근 제보</strong><span>{reports.length}건</span></header>
+              <div className="report-list">
+                {reportLoading && !reports.length ? <div className="strategy-empty">관계 제보를 불러오는 중…</div> : reports.length ? reports.map((entry) => {
+                  const subjectSkill = skills.find((skill) => skill.id === entry.subjectSkillId);
+                  const relatedSkill = skills.find((skill) => skill.id === entry.relatedSkillId);
+                  const versionMismatch = entry.datasetVersion !== (meta.datasetVersion || meta.sourceHash.slice(0, 12));
+                  return <article className="report-card" key={entry.id}>
+                    <div className="report-card-title"><span className={entry.relationType}>{entry.relationType === "synergy" ? "시너지" : "카운터"}</span><strong>{subjectSkill?.name || `ID ${entry.subjectSkillId}`} <i>{entry.subjectMode === "direct" ? "정" : "역"}</i><ChevronRight size={13} /> {relatedSkill?.name || `ID ${entry.relatedSkillId}`} <i>{entry.relatedMode === "direct" ? "정" : "역"}</i></strong></div>
+                    <p>{entry.evidence}</p>
+                    <small className={versionMismatch ? "mismatch" : ""}>{entry.datasetVersion}{versionMismatch ? " · 다른 데이터 버전" : " · 현재 버전"}</small>
+                  </article>;
+                }) : <div className="strategy-empty"><MessageSquarePlus size={28} /><strong>첫 관계를 제보해 보세요</strong><span>두 공법과 정·역련, 실제 근거만 간단히 남길 수 있습니다.</span></div>}
+              </div>
+            </section>
           </div>
         </div>
       </div>}

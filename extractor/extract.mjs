@@ -483,6 +483,16 @@ const conceptRules = [
   ["오행", /五行|오행/i],
 ];
 
+const elementNames = ["금강", "자하", "현음", "순양", "귀원", "혼원"];
+const elementAliases = [
+  ["금강", /金刚|金剛|금강/i],
+  ["자하", /紫霞|자하/i],
+  ["현음", /玄阴|玄陰|현음/i],
+  ["순양", /纯阳|純陽|순양/i],
+  ["귀원", /归元|歸元|귀원/i],
+  ["혼원", /混元|혼원/i],
+];
+
 const triggerRules = [
   ["전투 시작", /战斗开始|进入战斗|전투 시작/i],
   ["시전 시작", /开始施展|施展开始|시전 시작/i],
@@ -575,7 +585,11 @@ function buildSemanticEdges(clauses, logic) {
     const verbs = [];
     const convertsToOldInjury = resources.includes("오래된 부상")
       && /转(?:化)?为|变为|전환|구상처로\s*변|오래된\s*부상(?:으)?로\s*변/i.test(clause);
-    if (convertsToOldInjury) verbs.push("produces");
+    const createsEnemyBan = target === "적"
+      && resources.includes("봉금")
+      && /封禁|封印|봉금|봉인/i.test(clause)
+      && !/(?:봉금|封禁).{0,14}(?:시간|时间).{0,12}(?:증가|연장|늘어|提高|增加|延长)/i.test(clause);
+    if (convertsToOldInjury || createsEnemyBan) verbs.push("produces");
     else if (actionRules.prevents.test(clause)) verbs.push("prevents");
     else if (actionRules.clears.test(clause)) verbs.push("clears");
     else if (actionRules.consumes.test(clause)) verbs.push("consumes");
@@ -603,6 +617,43 @@ function buildSemanticEdges(clauses, logic) {
   ])).values()];
 }
 
+function analyzeBanControl(textKo, textCn, semanticEdges) {
+  const text = `${textKo}\n${textCn}`;
+  const sentences = text.split(/[。.!！?？;；\n]+/).map((sentence) => sentence.trim()).filter(Boolean);
+  const deniedElements = new Set();
+  const weakenedElements = new Set();
+
+  for (const sentence of sentences) {
+    if (semanticTargetFor(sentence) !== "적") continue;
+    const elements = elementAliases.filter(([, pattern]) => pattern.test(sentence)).map(([name]) => name);
+    if (!elements.length) continue;
+    if (/(?:봉금|봉인|封禁|封印)/i.test(sentence) && !/(?:어렵|면역|불가|难以|免疫|不可)/i.test(sentence)) {
+      for (const element of elements) deniedElements.add(element);
+    }
+    if (/(?:공법|功法).{0,18}(?:위력|威力).{0,16}(?:감소|저하|降低|减少)|(?:위력|威力).{0,16}(?:감소|저하|降低|减少)/i.test(sentence)) {
+      for (const element of elements) weakenedElements.add(element);
+    }
+  }
+
+  const creates = semanticEdges.some((edge) => edge.resource === "봉금" && edge.target === "적" && ["produces", "amplifies"].includes(edge.verb))
+    || sentences.some((sentence) => semanticTargetFor(sentence) === "적" && /(?:봉금|봉인|封禁|封印)/i.test(sentence) && !/(?:시간|时间).{0,12}(?:증가|연장|늘어|提高|增加|延长)/i.test(sentence));
+  const amplifies = /(?:봉금|봉인|封禁|封印).{0,18}(?:시간|时间).{0,18}(?:증가|연장|늘어|두\s*배|提高|增加|延长|翻倍)/i.test(text);
+  const exploits = /(?:봉금|봉인|封禁|封印).{0,24}(?:회복|해제|종료|恢复|解除|结束).{0,40}(?:피해|반서|伤害|反噬)/i.test(text);
+  const clears = semanticEdges.some((edge) => edge.resource === "봉금" && ["자신", "전투 상태"].includes(edge.target) && edge.verb === "clears")
+    || /(?:봉금|봉인|封禁|封印).{0,22}(?:즉시\s*)?(?:종료|제거|해제|정화|结束|消除|解除|清除)/i.test(text);
+  const resists = /(?:모든\s*)?공법.{0,18}(?:봉금|봉인).{0,18}(?:어렵|면역|무효)|(?:봉금|봉인).{0,18}(?:할\s*수\s*없|되지\s*않|면역)|功法.{0,18}(?:封禁|封印).{0,18}(?:困难|免疫|无效)|(?:无法|不可).{0,10}(?:封禁|封印)/i.test(text);
+
+  return {
+    creates,
+    amplifies,
+    exploits,
+    clears,
+    resists,
+    deniedElements: [...deniedElements],
+    weakenedElements: [...weakenedElements],
+  };
+}
+
 function analyzeEffect(textKo, textCn, code, mode, shortKo = [], shortCn = []) {
   const text = `${textCn} ${textKo}`;
   const concepts = matchedConcepts(text);
@@ -618,6 +669,7 @@ function analyzeEffect(textKo, textCn, code, mode, shortKo = [], shortCn = []) {
   const unique = (values) => [...new Set(values)];
   const logic = extractCodeLogic(code, mode);
   const semanticEdges = buildSemanticEdges(clauses, logic);
+  const banControl = analyzeBanControl(textKo, textCn, semanticEdges);
   const codeEvents = logic.events.map((event) => event.name);
   const codeEventLabels = unique(logic.events.map((event) => event.label));
   const codeSignals = logic.symbols;
@@ -664,6 +716,7 @@ function analyzeEffect(textKo, textCn, code, mode, shortKo = [], shortCn = []) {
     affectedFields: affectedFieldIds.map((fieldId) => affectedFieldById.get(fieldId)?.name || `전투 필드 ${fieldId}`),
     affectedFieldIds,
     semanticEdges,
+    banControl,
     logic: {
       ...logic,
       affectedFields: affectedFieldIds.map((fieldId) => affectedFieldById.get(fieldId)?.name || `전투 필드 ${fieldId}`),
@@ -684,8 +737,6 @@ function detectTags(text, code) {
 const equipNames = Array.from({ length: 5 }, (_, index) => uiKo.get(`LK_CombatSkill_EquipType_${index}`) || ["내공", "파괴", "경령", "호체", "기교"][index]);
 // CombatSkillConfig.FiveElements uses the game's internal-energy schools,
 // not the literal metal/wood/water/fire/earth labels.
-const elementNames = ["금강", "자하", "현음", "순양", "귀원", "혼원"];
-
 const skills = [];
 for (const call of extractCalls(combatSource, "CombatSkillItem")) {
   const args = splitArguments(call);
@@ -888,6 +939,17 @@ function evaluateSynergy(selected, selectedMode, candidate, candidateMode) {
   const best = bestRelationCandidate();
   const supplies = ["produces", "amplifies"];
   const needs = ["requires", "consumes", "amplifies"];
+  const aBan = selectedEffect.analysis.banControl;
+  const bBan = candidateEffect.analysis.banControl;
+
+  if (aBan.creates && (bBan.amplifies || bBan.exploits)) {
+    const purpose = bBan.exploits ? "봉금 해제 순간을 추가 피해 조건으로 사용" : "적의 봉금 지속시간을 늘려 공법 차단을 연장";
+    best.consider(60, `선택 공법이 만든 「봉금」을 이어 ${purpose}`, "ban-chain", "봉금", `${selectedEffect.description} / ${candidateEffect.description}`);
+  }
+  if (bBan.creates && (aBan.amplifies || aBan.exploits)) {
+    const purpose = aBan.exploits ? "선택 공법의 봉금 해제 발동 조건을 공급" : "선택 공법의 봉금시간 증폭 대상을 공급";
+    best.consider(62, `이 공법이 적에게 「봉금」을 만들어 ${purpose}`, "ban-chain", "봉금", `${candidateEffect.description} / ${selectedEffect.description}`);
+  }
 
   for (const supply of aEdges.filter((edge) => edgeMatches(edge, supplies, "자신") && edge.valence === "이로운 상태" && isSpecificRelationResource(edge.resource))) {
     const need = bEdges.find((edge) => edgeMatches(edge, needs, "자신", supply.resource));
@@ -950,6 +1012,19 @@ function evaluateCounter(selected, selectedMode, candidate, candidateMode) {
   const best = bestRelationCandidate();
   const inverse = ["clears", "reduces", "prevents", "consumes"];
   const supplies = ["produces", "amplifies"];
+  const aBan = selectedEffect.analysis.banControl;
+  const bBan = candidateEffect.analysis.banControl;
+
+  if (bBan.deniedElements.includes(selected.elementName)) {
+    best.consider(70, `적의 「${selected.elementName}」 공법을 직접 봉금해 선택 공법의 시전을 제한`, "element-denial", `${selected.elementName} 공법`, candidateEffect.description);
+  }
+  if (bBan.weakenedElements.includes(selected.elementName)) {
+    best.consider(64, `적의 「${selected.elementName}」 공법 위력을 전투 동안 낮춰 선택 공법의 성능을 직접 억제`, "element-weakening", `${selected.elementName} 공법`, candidateEffect.description);
+  }
+  if (aBan.creates && (bBan.resists || bBan.clears)) {
+    const defense = bBan.clears ? "봉금 상태를 해제·종료" : "공법이 봉금되기 어렵게 만들어 차단을 저항";
+    best.consider(68, `선택 공법의 「봉금」에 맞서 ${defense}`, "ban-resistance", "봉금", `${selectedEffect.description} / ${candidateEffect.description}`);
+  }
 
   for (const output of aEdges.filter((edge) => edgeMatches(edge, supplies, "적") && edge.valence === "해로운 상태" && isSpecificRelationResource(edge.resource))) {
     const defense = bEdges.find((edge) => edgeMatches(edge, inverse, "자신", output.resource));
