@@ -29,6 +29,11 @@ def load_unitypy_image_helpers():
     that proprietary, unused runtime dependency.
     """
 
+    # Texture2DConverter imports the optional ASTC encoder eagerly even though
+    # extraction only calls its decoding path.  A namespace stub keeps that
+    # encoder (and its CPU-specific archspec data) out of the portable bundle.
+    sys.modules.setdefault("astc_encoder", types.ModuleType("astc_encoder"))
+
     package_name = "UnityPy.export"
     if package_name not in sys.modules:
         package = types.ModuleType(package_name)

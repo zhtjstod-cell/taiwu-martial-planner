@@ -75,6 +75,8 @@ test("portable release workflow builds native runtime bundles on both operating 
   assert.match(workflow, /--collect-data UnityPy/);
   assert.match(workflow, /--hidden-import UnityPy\.resources/);
   assert.match(workflow, /--hidden-import UnityPy\.export\.SpriteHelper/);
+  assert.match(workflow, /--exclude-module astc_encoder/);
+  assert.match(workflow, /--exclude-module numpy/);
   assert.match(workflow, /--exclude-module fmod_toolkit/);
   assert.match(workflow, /dotnet-install/);
   assert.match(workflow, /ilspycmd --version 9\.1\.0\.7988/);
