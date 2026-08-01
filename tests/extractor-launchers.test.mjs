@@ -70,6 +70,9 @@ test("portable release workflow builds native runtime bundles on both operating 
   assert.match(workflow, /ubuntu-22\.04/);
   assert.match(workflow, /node-version: 22\.13\.1/);
   assert.match(workflow, /PyInstaller/);
+  assert.doesNotMatch(workflow, /--collect-all (?:UnityPy|PIL)/);
+  assert.match(workflow, /--hidden-import UnityPy\.export\.SpriteHelper/);
+  assert.match(workflow, /--exclude-module fmod_toolkit/);
   assert.match(workflow, /dotnet-install/);
   assert.match(workflow, /ilspycmd --version 9\.1\.0\.7988/);
   assert.match(packager, /Portable runtime is incomplete/);

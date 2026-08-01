@@ -9,13 +9,39 @@ without redistributing unrelated game art.
 from __future__ import annotations
 
 import argparse
+import importlib
 from pathlib import Path
+import sys
+import types
 
 import UnityPy
 from PIL.Image import Transpose
 from UnityPy.enums import SpritePackingRotation
-from UnityPy.export.SpriteHelper import SpriteSettings
-from UnityPy.export.Texture2DConverter import get_image_from_texture2d
+
+
+def load_unitypy_image_helpers():
+    """Load only UnityPy's image exporters, without its optional FMOD stack.
+
+    UnityPy 1.25 imports every exporter from ``UnityPy.export.__init__``.  That
+    includes the optional AudioClip converter and makes an otherwise image-only
+    portable build depend on FMOD.  Registering the package namespace first
+    lets us import the two image modules directly and keeps the release free of
+    that proprietary, unused runtime dependency.
+    """
+
+    package_name = "UnityPy.export"
+    if package_name not in sys.modules:
+        package = types.ModuleType(package_name)
+        package.__package__ = package_name
+        package.__path__ = [str(Path(UnityPy.__file__).resolve().parent / "export")]
+        sys.modules[package_name] = package
+
+    sprite_helper = importlib.import_module(f"{package_name}.SpriteHelper")
+    texture_converter = importlib.import_module(f"{package_name}.Texture2DConverter")
+    return sprite_helper.SpriteSettings, texture_converter.get_image_from_texture2d
+
+
+SpriteSettings, get_image_from_texture2d = load_unitypy_image_helpers()
 
 
 ATLAS_FILTERS = {
