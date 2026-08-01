@@ -5,6 +5,8 @@ import {
   Check,
   ChevronRight,
   Database,
+  FileDown,
+  FileUp,
   GitCompareArrows,
   GripVertical,
   Hammer,
@@ -34,6 +36,7 @@ import rawSkills4 from "./data/combat-skills-4.json";
 import rawSkills5 from "./data/combat-skills-5.json";
 import rawSkills6 from "./data/combat-skills-6.json";
 import rawSkills7 from "./data/combat-skills-7.json";
+import { createBuildFile, readBuildFile } from "./build-transfer.mjs";
 
 const rawData = {
   ...rawManifest,
@@ -187,7 +190,7 @@ function blankPlan(): Plan {
 }
 
 function migratePlans(value: unknown): Plan[] {
-  if (!Array.isArray(value)) return [{ equipped: [{ skillId: 287, mode: "direct", mastered: false }], genericAllocation: [0, 0, 0, 0], maxSlots: false }, blankPlan(), blankPlan()];
+  if (!Array.isArray(value)) return [{ equipped: [{ skillId: 287, mode: "direct", mastered: false }], genericAllocation: [0, 0, 0, 0], maxSlots: false }, ...Array.from({ length: 5 }, blankPlan)];
   const migrated = value.map((item): Plan => {
     if (Array.isArray(item)) return { equipped: item.map((entry) => ({ ...entry, mastered: Boolean(entry.mastered) })), genericAllocation: [0, 0, 0, 0], maxSlots: false };
     const candidate = item as Partial<Plan>;
@@ -197,8 +200,8 @@ function migratePlans(value: unknown): Plan[] {
       maxSlots: Boolean(candidate.maxSlots),
     };
   });
-  while (migrated.length < 3) migrated.push(blankPlan());
-  return migrated.slice(0, 3);
+  while (migrated.length < 6) migrated.push(blankPlan());
+  return migrated.slice(0, 6);
 }
 
 function computeLayout(plan: Plan, skills: Skill[], uiProfile: UiProfile) {
@@ -340,6 +343,7 @@ export default function Planner() {
   const [customDataset, setCustomDataset] = useState(false);
   const [datasetMessage, setDatasetMessage] = useState("");
   const uploadRef = useRef<HTMLInputElement>(null);
+  const buildImportRef = useRef<HTMLInputElement>(null);
   const [boardOpen, setBoardOpen] = useState(false);
   const [strategies, setStrategies] = useState<StrategyEntry[]>([]);
   const [boardLoading, setBoardLoading] = useState(false);
@@ -473,6 +477,43 @@ export default function Planner() {
       setDatasetMessage(`${valid.meta.datasetVersion || valid.meta.sourceHash.slice(0, 12)} · ${valid.skills.length}식 적용 완료`);
     } catch (error) {
       setDatasetMessage(error instanceof Error ? error.message : "파일을 읽지 못했습니다.");
+    }
+  };
+
+  const exportBuild = () => {
+    const datasetVersion = meta.datasetVersion || meta.gameVersion || meta.sourceHash.slice(0, 12);
+    const payload = createBuildFile({ plan, datasetVersion, sourceHash: meta.sourceHash });
+    const blob = new Blob([`${JSON.stringify(payload, null, 2)}\n`], { type: "application/json;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const safeVersion = datasetVersion.replace(/[\\/:*?"<>|\s]+/g, "-").slice(0, 40);
+    link.href = url;
+    link.download = `태오회권_운공안_${activePlan + 1}_${safeVersion}.json`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    setDatasetMessage(`프리셋 ${activePlan + 1}을 운공안 파일로 내보냈습니다.`);
+  };
+
+  const importBuild = async (file: File) => {
+    try {
+      if (file.size > 1024 * 1024) throw new Error("운공안 파일이 1MB 제한을 넘었습니다.");
+      const imported = readBuildFile(JSON.parse(await file.text()), new Set(skills.map((skill) => skill.id)));
+      const importedLayout = computeLayout(imported.plan as Plan, skills, uiProfile);
+      if (importedLayout.activeSkillIds.size !== imported.plan.equipped.length) throw new Error("현재 게임 규칙의 운공칸을 초과하는 배치입니다.");
+      updatePlan(() => imported.plan as Plan);
+      if (imported.plan.equipped.length) {
+        setSelectedId(imported.plan.equipped[0].skillId);
+        setMode(imported.plan.equipped[0].mode as Mode);
+      }
+      const currentVersion = meta.datasetVersion || meta.gameVersion || meta.sourceHash.slice(0, 12);
+      const mismatch = imported.datasetVersion !== currentVersion || imported.sourceHash !== meta.sourceHash;
+      setDatasetMessage(mismatch
+        ? `프리셋 ${activePlan + 1}에 적용했습니다. 제작 버전 ${imported.datasetVersion} · 현재 ${currentVersion} — 공법 ID와 운공칸 검증 완료`
+        : `프리셋 ${activePlan + 1}에 운공안을 적용했습니다.`);
+    } catch (error) {
+      setDatasetMessage(error instanceof Error ? error.message : "운공안 파일을 읽지 못했습니다.");
     }
   };
 
@@ -637,8 +678,8 @@ export default function Planner() {
         </aside>
 
         <section className="board-panel panel">
-          <div className="board-heading"><div><span className="eyebrow">운공 프리셋</span><h1>운공 배치</h1></div><div className="legend"><i className="direct-dot" />정련<i className="reverse-dot" />역련</div></div>
-          <div className="game-board-toolbar"><span className="toolbar-label">프리셋</span><div className="plan-tabs">{plans.map((_, index) => <button key={index} className={activePlan === index ? "active" : ""} onClick={() => setActivePlan(index)}>{index + 1}</button>)}</div><button className={`max-slot-toggle ${plan.maxSlots ? "active" : ""}`} onClick={() => updatePlan((current) => ({ ...current, maxSlots: !current.maxSlots }))}><Check size={12} /> 최대 운공칸</button><span className="max-slot-help">조건 없이 간단하게 최대 운공칸에 도달할 수 있습니다.</span><span className="generic-grid-note">{plan.maxSlots ? <b>계통별 게임 상한 적용</b> : <>만능공법칸 <b>{layout.genericLeft}/{layout.genericPool}</b></>}</span></div>
+          <div className="board-heading"><div><span className="eyebrow">운공 프리셋</span><h1>운공 배치</h1></div><div className="board-heading-actions"><div className="legend"><i className="direct-dot" />정련<i className="reverse-dot" />역련</div><input ref={buildImportRef} className="sr-only" type="file" accept=".json,application/json" onChange={(event) => { const file = event.target.files?.[0]; if (file) void importBuild(file); event.currentTarget.value = ""; }} /><button onClick={exportBuild} title="현재 프리셋 내보내기"><FileDown size={13} /> 내보내기</button><button onClick={() => buildImportRef.current?.click()} title="운공안 파일 가져오기"><FileUp size={13} /> 가져오기</button></div></div>
+          <div className="game-board-toolbar"><span className="toolbar-label">프리셋</span><div className="plan-tabs">{plans.map((_, index) => <button key={index} data-plan-index={index + 1} className={activePlan === index ? "active" : ""} onClick={() => setActivePlan(index)}>{index + 1}</button>)}</div><button className={`max-slot-toggle ${plan.maxSlots ? "active" : ""}`} onClick={() => updatePlan((current) => ({ ...current, maxSlots: !current.maxSlots }))}><Check size={12} /> 최대 운공칸</button><span className="max-slot-help">조건 없이 간단하게 최대 운공칸에 도달할 수 있습니다.</span><span className="generic-grid-note">{plan.maxSlots ? <b>계통별 게임 상한 적용</b> : <>만능공법칸 <b>{layout.genericLeft}/{layout.genericPool}</b></>}</span></div>
           <div className="cultivation-layout">
             <div className="practitioner-core" aria-hidden="true">
               <span className="original-yuanpan" />
@@ -773,7 +814,7 @@ export default function Planner() {
         </div>
       </div>}
 
-      <footer className="statusbar"><span>DATA · {meta.datasetVersion || meta.sourceHash.slice(0, 12)}{customDataset ? " · 로컬 업로드" : ""}</span><span>한국어 · 원본+설치 모드 우선</span><span>오류 차단 · 적의 부상 제거는 카운터에서 제외</span><span className="status-ok"><i /> 관계 근거 누락 {meta.relationAudit.missingEvidenceCount}</span></footer>
+      <footer className="statusbar"><span>DATA · {meta.datasetVersion || meta.sourceHash.slice(0, 12)}{customDataset ? " · 로컬 업로드" : ""}</span><span>한국어 · 원본+설치 모드 우선</span><span>오류 차단 · 적의 부상 제거는 카운터에서 제외</span><span className="status-update-guide">게임 버전 업데이트 시 <a href="https://github.com/zhtjstod-cell/taiwu-martial-planner/releases" target="_blank" rel="noreferrer">GitHub 추출기</a>로 다시 추출해 데이터 업로드</span><span className="status-ok"><i /> 관계 근거 누락 {meta.relationAudit.missingEvidenceCount}</span></footer>
     </main>
   );
 }

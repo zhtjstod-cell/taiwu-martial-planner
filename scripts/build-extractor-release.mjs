@@ -1,87 +1,98 @@
 #!/usr/bin/env node
 
-import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const rawVersion = process.argv[2] || "v1.1.0";
+const args = process.argv.slice(2);
+const rawVersion = args.find((value) => /^v?\d+\.\d+\.\d+$/.test(value)) || "v1.2.0";
 const version = rawVersion.startsWith("v") ? rawVersion : `v${rawVersion}`;
-if (!/^v\d+\.\d+\.\d+$/.test(version)) throw new Error(`Invalid release version: ${rawVersion}`);
+const valueOf = (name, fallback) => {
+  const index = args.indexOf(name);
+  return index >= 0 && args[index + 1] ? args[index + 1] : fallback;
+};
+const platform = valueOf("--platform", process.platform === "win32" ? "windows" : "linux");
+if (!["windows", "linux"].includes(platform)) throw new Error(`Unsupported platform: ${platform}`);
+if ((platform === "windows") !== (process.platform === "win32")) throw new Error(`${platform} bundles must be packaged on their native runner.`);
 
-const stagingRoot = resolve(root, ".release-staging", version);
+const runtimeRoot = resolve(valueOf("--runtime", join(root, ".release-runtime")));
+const stagingRoot = resolve(root, ".release-staging", version, platform);
 const releaseRoot = resolve(root, "release");
 if (!stagingRoot.startsWith(resolve(root, ".release-staging"))) throw new Error("Staging path escaped the repository.");
+if (!runtimeRoot.startsWith(root)) throw new Error("Runtime path must stay inside the repository workspace.");
+
+const requiredRuntimeFiles = platform === "windows" ? [
+  "node/node.exe",
+  "dotnet/dotnet.exe",
+  "ilspy/ilspycmd.exe",
+  "ui/taiwu-ui-extractor/taiwu-ui-extractor.exe",
+] : [
+  "node/node",
+  "dotnet/dotnet",
+  "ilspy/ilspycmd",
+  "ui/taiwu-ui-extractor/taiwu-ui-extractor",
+];
+for (const file of requiredRuntimeFiles) {
+  if (!existsSync(join(runtimeRoot, file))) throw new Error(`Portable runtime is incomplete: ${file}`);
+}
+
 rmSync(stagingRoot, { recursive: true, force: true });
 mkdirSync(stagingRoot, { recursive: true });
 mkdirSync(releaseRoot, { recursive: true });
 
 const archiveVersion = version.slice(1);
-const windowsName = `taiwu-martial-extractor-windows-v${archiveVersion}`;
-const linuxName = `taiwu-martial-extractor-linux-v${archiveVersion}`;
-const windowsStage = join(stagingRoot, windowsName);
-const linuxStage = join(stagingRoot, linuxName);
-mkdirSync(windowsStage, { recursive: true });
-mkdirSync(linuxStage, { recursive: true });
+const bundleName = `taiwu-martial-extractor-${platform}-v${archiveVersion}`;
+const stage = join(stagingRoot, bundleName);
+mkdirSync(stage, { recursive: true });
 
-const extractorFiles = ["code-ir.mjs", "embed-portable-assets.mjs", "extract-ui-assets.py", "extract.mjs"];
-function copyExtractor(destination) {
-  const target = join(destination, "extractor");
-  mkdirSync(target, { recursive: true });
-  for (const file of extractorFiles) cpSync(join(root, "extractor", file), join(target, file));
-}
+const launcherRoot = join(root, `${platform}-extractor`);
+const launcherFiles = platform === "windows"
+  ? ["README.txt", "태오회권_무공추출기.bat", "find-taiwu-game.ps1", "run-extractor.ps1"]
+  : ["README.md", "find-taiwu-game.sh", "taiwu-martial-extractor.sh"];
+for (const file of launcherFiles) cpSync(join(launcherRoot, file), join(stage, file));
 
-for (const file of ["README.txt", "태오회권_무공추출기.bat", "find-taiwu-game.ps1", "run-extractor.ps1"]) {
-  cpSync(join(root, "windows-extractor", file), join(windowsStage, file));
+const extractorTarget = join(stage, "extractor");
+mkdirSync(extractorTarget, { recursive: true });
+for (const file of ["code-ir.mjs", "embed-portable-assets.mjs", "extract.mjs", "THIRD_PARTY_NOTICES.txt"]) {
+  cpSync(join(root, "extractor", file), join(extractorTarget, file));
 }
-for (const file of ["README.md", "find-taiwu-game.sh", "taiwu-martial-extractor.sh"]) {
-  cpSync(join(root, "linux-extractor", file), join(linuxStage, file));
-}
-copyExtractor(windowsStage);
-copyExtractor(linuxStage);
+cpSync(runtimeRoot, join(stage, ".runtime"), { recursive: true });
 
 function normalizeText(file, eol, withBom = false) {
-  const original = readFileSync(file);
-  const text = original.toString("utf8").replace(/^\ufeff/, "").replace(/\r?\n/g, eol);
+  const text = readFileSync(file, "utf8").replace(/^\ufeff/, "").replace(/\r?\n/g, eol);
   const encoded = Buffer.from(text, "utf8");
   writeFileSync(file, withBom ? Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), encoded]) : encoded);
 }
 
-normalizeText(join(windowsStage, "태오회권_무공추출기.bat"), "\r\n");
-normalizeText(join(windowsStage, "README.txt"), "\r\n");
-normalizeText(join(windowsStage, "find-taiwu-game.ps1"), "\r\n", true);
-normalizeText(join(windowsStage, "run-extractor.ps1"), "\r\n", true);
-for (const file of ["README.md", "find-taiwu-game.sh", "taiwu-martial-extractor.sh", ...extractorFiles.map((name) => join("extractor", name))]) {
-  normalizeText(join(linuxStage, file), "\n");
+if (platform === "windows") {
+  normalizeText(join(stage, "태오회권_무공추출기.bat"), "\r\n");
+  normalizeText(join(stage, "README.txt"), "\r\n");
+  normalizeText(join(stage, "find-taiwu-game.ps1"), "\r\n", true);
+  normalizeText(join(stage, "run-extractor.ps1"), "\r\n", true);
+} else {
+  for (const file of ["README.md", "find-taiwu-game.sh", "taiwu-martial-extractor.sh", "extractor/code-ir.mjs", "extractor/embed-portable-assets.mjs", "extractor/extract.mjs"]) {
+    normalizeText(join(stage, file), "\n");
+  }
+  for (const file of [
+    "find-taiwu-game.sh",
+    "taiwu-martial-extractor.sh",
+    ".runtime/node/node",
+    ".runtime/dotnet/dotnet",
+    ".runtime/ilspy/ilspycmd",
+    ".runtime/ui/taiwu-ui-extractor/taiwu-ui-extractor",
+  ]) chmodSync(join(stage, file), 0o755);
 }
 
-const windowsArchive = join(releaseRoot, `${windowsName}.zip`);
-const linuxArchive = join(releaseRoot, `${linuxName}.tar.gz`);
-rmSync(windowsArchive, { force: true });
-rmSync(linuxArchive, { force: true });
-
-if (process.platform === "win32") {
-  const escapedSource = windowsStage.replace(/'/g, "''");
-  const escapedTarget = windowsArchive.replace(/'/g, "''");
+const archive = join(releaseRoot, platform === "windows" ? `${bundleName}.zip` : `${bundleName}.tar.gz`);
+rmSync(archive, { force: true });
+if (platform === "windows") {
+  const escapedSource = stage.replace(/'/g, "''");
+  const escapedTarget = archive.replace(/'/g, "''");
   execFileSync("powershell.exe", ["-NoLogo", "-NoProfile", "-Command", `Compress-Archive -LiteralPath '${escapedSource}' -DestinationPath '${escapedTarget}' -CompressionLevel Optimal`], { stdio: "inherit" });
 } else {
-  execFileSync("zip", ["-rq", windowsArchive, basename(windowsStage)], { cwd: stagingRoot, stdio: "inherit" });
-}
-const gitBash = "C:\\Program Files\\Git\\bin\\bash.exe";
-if (process.platform === "win32" && existsSync(gitBash)) {
-  const toBashPath = (path) => path.replace(/^([A-Za-z]):/, (_, drive) => `/${drive.toLowerCase()}`).replaceAll("\\", "/");
-  const quote = (value) => `'${value.replaceAll("'", `'\"'\"'`)}'`;
-  const command = `tar --owner=0 --group=0 --numeric-owner --mode=0755 -czf ${quote(toBashPath(linuxArchive))} -C ${quote(toBashPath(stagingRoot))} ${quote(basename(linuxStage))}`;
-  execFileSync(gitBash, ["-lc", command], { stdio: "inherit" });
-} else {
-  execFileSync("tar", ["-czf", linuxArchive, "-C", stagingRoot, basename(linuxStage)], { stdio: "inherit" });
+  execFileSync("tar", ["--owner=0", "--group=0", "--numeric-owner", "-czf", archive, "-C", stagingRoot, basename(stage)], { stdio: "inherit" });
 }
 
-const assets = [windowsArchive, linuxArchive];
-const checksums = assets.map((file) => `${createHash("sha256").update(readFileSync(file)).digest("hex")}  ${basename(file)}`).join("\n") + "\n";
-const checksumFile = join(releaseRoot, `taiwu-martial-extractor-v${archiveVersion}-SHA256SUMS.txt`);
-writeFileSync(checksumFile, checksums, "utf8");
-
-console.log(JSON.stringify({ version, assets: [...assets, checksumFile] }, null, 2));
+console.log(JSON.stringify({ version, platform, archive }, null, 2));

@@ -1,0 +1,20 @@
+Portable extractor third-party components
+=========================================
+
+The release archive contains unmodified runtime components solely to let users
+run the extractor without installing development tools globally.
+
+- Node.js 22.13.1 — MIT and bundled third-party licenses
+  https://nodejs.org/
+- Python 3.11 runtime embedded by PyInstaller — Python Software Foundation License
+  https://www.python.org/
+- .NET 8 runtime — MIT
+  https://dotnet.microsoft.com/
+- ILSpy command line 9.1.0.7988 — MIT
+  https://github.com/icsharpcode/ILSpy
+- UnityPy 1.25.0 — MIT
+  https://github.com/K0lb3/UnityPy
+- Pillow and PyInstaller — their respective bundled licenses
+
+The build copies available license texts into `.runtime/licenses` and keeps the
+Node.js and .NET notices beside their runtime files.

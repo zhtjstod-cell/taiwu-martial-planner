@@ -35,13 +35,6 @@ function Exit-Extractor {
   exit $Code
 }
 
-function Get-RequiredCommand {
-  param([string]$Name, [string]$InstallMessage)
-  $command = Get-Command $Name -ErrorAction SilentlyContinue | Select-Object -First 1
-  if (-not $command) { throw $InstallMessage }
-  return $command.Source
-}
-
 function Invoke-Checked {
   param([string]$FilePath, [string[]]$Arguments)
   & $FilePath @Arguments
@@ -68,57 +61,31 @@ if ([string]::IsNullOrWhiteSpace($GameDir) -or
 $GameDir = (Resolve-Path -LiteralPath $GameDir).Path
 
 try {
-  $node = Get-RequiredCommand "node" "Node.js 22.13 이상이 필요합니다: https://nodejs.org/"
-  $nodeVersion = [version]((& $node --version).Trim().TrimStart('v'))
-  if ($nodeVersion -lt [version]"22.13.0") { throw "Node.js 22.13 이상이 필요합니다. 현재 버전: $nodeVersion" }
-
-  $python = Get-RequiredCommand "python" "Python 3.11 이상이 필요합니다: https://www.python.org/downloads/windows/"
-  $pythonLine = ((& $python --version 2>&1) | Select-Object -First 1).ToString()
-  if ($pythonLine -notmatch '(\d+\.\d+\.\d+)') { throw "Python 버전을 확인하지 못했습니다." }
-  $pythonVersion = [version]$Matches[1]
-  if ($pythonVersion -lt [version]"3.11.0") { throw "Python 3.11 이상이 필요합니다. 현재 버전: $pythonVersion" }
-
-  $dotnet = Get-RequiredCommand "dotnet" ".NET 8 SDK가 설치되어 있지 않습니다: https://dotnet.microsoft.com/download/dotnet/8.0"
-  $sdkLines = @(& $dotnet --list-sdks 2>$null)
-  if ($LASTEXITCODE -ne 0 -or $sdkLines.Count -eq 0) {
-    throw ".NET 실행 환경만 있고 SDK가 없거나 dotnet이 손상되었습니다. .NET 8 SDK를 설치하세요: https://dotnet.microsoft.com/download/dotnet/8.0"
-  }
-  $supportedSdk = $false
-  foreach ($line in $sdkLines) {
-    if ($line -match '^(\d+\.\d+\.\d+)') {
-      if ([version]$Matches[1] -ge [version]"8.0.0") { $supportedSdk = $true; break }
+  $node = Join-Path $runtime "node\node.exe"
+  $dotnetRoot = Join-Path $runtime "dotnet"
+  $dotnet = Join-Path $dotnetRoot "dotnet.exe"
+  $ilspy = Join-Path $runtime "ilspy\ilspycmd.exe"
+  $uiExtractor = Join-Path $runtime "ui\taiwu-ui-extractor\taiwu-ui-extractor.exe"
+  foreach ($required in @($node, $dotnet, $ilspy, $uiExtractor)) {
+    if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
+      throw "내장 실행 파일이 없습니다: $required"
     }
   }
-  if (-not $supportedSdk) {
-    throw ".NET 8 이상 SDK가 필요합니다. 감지된 SDK: $($sdkLines -join ', ')`nhttps://dotnet.microsoft.com/download/dotnet/8.0"
-  }
+  $env:DOTNET_ROOT = $dotnetRoot
+  $env:PATH = "$dotnetRoot;$($env:PATH)"
 } catch {
-  Write-Host "[필수 프로그램 오류] $($_.Exception.Message)" -ForegroundColor Red
-  Write-Host "설치 후 추출기를 다시 실행해 주세요. 관리자 권한은 필요하지 않습니다."
+  Write-Host "[내장 실행환경 오류] $($_.Exception.Message)" -ForegroundColor Red
+  Write-Host "릴리스 ZIP을 다시 받아 완전히 압축 해제해 주세요. 별도 프로그램 설치는 필요하지 않습니다."
   Exit-Extractor 2
 }
 
 try {
-  $venvPython = Join-Path $runtime "python\Scripts\python.exe"
-  if (-not (Test-Path -LiteralPath $venvPython -PathType Leaf)) {
-    Write-Host "[1/5] 전용 Python 환경을 준비합니다..."
-    Invoke-Checked $python @("-m", "venv", (Join-Path $runtime "python"))
-  }
-  Invoke-Checked $venvPython @("-m", "pip", "install", "--disable-pip-version-check", "--quiet", "UnityPy==1.25.0")
-
-  $toolDir = Join-Path $runtime "tools"
-  $ilspy = Join-Path $toolDir "ilspycmd.exe"
-  if (-not (Test-Path -LiteralPath $ilspy -PathType Leaf)) {
-    Write-Host "[2/5] ILSpy 분석 도구를 준비합니다..."
-    Invoke-Checked $dotnet @("tool", "install", "ilspycmd", "--tool-path", $toolDir)
-  }
-
   $work = Join-Path ([IO.Path]::GetTempPath()) ("TaiwuPlannerExtractor_" + [guid]::NewGuid().ToString("N"))
   $workData = Join-Path $work "data"
   $workUi = Join-Path $work "game-ui"
   [void](New-Item -ItemType Directory -Path $workData, $workUi, $output -Force)
 
-  Write-Host "[3/5] 전체 무공과 정/역련 전투 코드를 분석합니다..."
+  Write-Host "[1/3] 전체 무공과 정/역련 전투 코드를 분석합니다..."
   $env:ILSPYCMD = $ilspy
   Invoke-Checked $node @(
     (Join-Path $projectRoot "extractor\extract.mjs"),
@@ -128,14 +95,13 @@ try {
     "--portable", $dataFile
   )
 
-  Write-Host "[4/5] 인게임 무공 아이콘을 추출합니다..."
-  Invoke-Checked $venvPython @(
-    (Join-Path $projectRoot "extractor\extract-ui-assets.py"),
+  Write-Host "[2/3] 인게임 무공 아이콘을 추출합니다..."
+  Invoke-Checked $uiExtractor @(
     "--game", $GameDir,
     "--out", $workUi
   )
 
-  Write-Host "[5/5] 사이트 업로드용 파일을 완성합니다..."
+  Write-Host "[3/3] 사이트 업로드용 파일을 완성합니다..."
   Invoke-Checked $node @(
     (Join-Path $projectRoot "extractor\embed-portable-assets.mjs"),
     "--data", $dataFile,

@@ -20,13 +20,17 @@ npm run extract:ui
 npm run dev
 ```
 
-일반 사용자는 GitHub Releases에서 운영체제에 맞는 추출기를 받습니다. Windows판은 ZIP을 풀고 `태오회권_무공추출기.bat`을 실행합니다. BAT는 코드페이지에 영향을 받지 않는 ASCII 부트스트랩이며 한글 안내·의존성 검사·실행은 UTF-8 BOM PowerShell 파일, Steam 경로 탐색은 별도 PowerShell 파일이 담당합니다. Linux판은 TAR.GZ를 풀고 `bash taiwu-martial-extractor.sh`를 실행합니다. 네이티브 Steam과 Flatpak Steam의 `libraryfolders.vdf`를 읽어 Proton이 사용하는 게임 설치 폴더를 찾으므로 Wine에서 BAT를 실행할 필요가 없습니다.
+일반 사용자는 GitHub Releases에서 운영체제에 맞는 추출기를 받습니다. Windows판은 ZIP을 풀고 `태오회권_무공추출기.bat`을 실행합니다. BAT는 코드페이지에 영향을 받지 않는 ASCII 부트스트랩이며 한글 안내·실행은 UTF-8 BOM PowerShell 파일, Steam 경로 탐색은 별도 PowerShell 파일이 담당합니다. Linux판은 TAR.GZ를 풀고 `bash taiwu-martial-extractor.sh`를 실행합니다. 네이티브 Steam과 Flatpak Steam의 `libraryfolders.vdf`를 읽어 Proton이 사용하는 게임 설치 폴더를 찾으므로 Wine에서 BAT를 실행할 필요가 없습니다.
+
+포터블 릴리스에는 Node.js 22.13.1, PyInstaller로 묶은 Python 3.11·UnityPy, .NET 8 런타임과 ILSpy가 운영체제별로 포함됩니다. 사용자는 Node.js, Python, venv, .NET SDK를 설치할 필요가 없고 첫 실행 중 패키지를 내려받지도 않습니다. 이 때문에 압축 파일은 이전판보다 커지지만, 시스템 개발 환경과 충돌하지 않고 삭제만으로 완전히 제거할 수 있습니다.
 
 두 추출기 모두 생성된 `output/태오회권_무공데이터.json`에 사이트에서 필요한 실제 인게임 공법 아이콘을 포함합니다. 사이트 상단 `데이터 업로드`에서 파일을 고르면 스키마·중복 ID·운공칸을 검증한 뒤 해당 브라우저에 즉시 적용하고 IndexedDB에 보존합니다. 임의 사용자가 공용 기본 데이터를 바꾸지는 못합니다.
 
 추출 버전은 게임 버전, Steam 빌드 ID, 한국어 로컬라이징 모드와 그 버전을 함께 기록합니다. 기본 `Language_KO`를 읽은 뒤 설치된 한국어 로컬라이징 모드를 덮어써 실제 플레이 화면의 명칭을 우선합니다.
 
-ILSpy CLI는 `--ilspy` 또는 `ILSPYCMD`로 지정할 수 있습니다. 배포 추출기는 전용 `.runtime`에 설치합니다. `.NET Runtime`만으로는 설치할 수 없으므로 Windows와 Linux 실행기 모두 `dotnet --list-sdks`에서 8.0 이상의 SDK를 확인하고 구체적인 설치 오류를 표시합니다.
+개발용 원본 스크립트는 ILSpy CLI를 `--ilspy` 또는 `ILSPYCMD`로 지정할 수 있습니다. 일반 사용자용 배포 추출기는 전용 `.runtime`에 필요한 실행환경을 모두 포함하고 시스템 PATH나 전역 패키지를 변경하지 않습니다.
+
+현재 프리셋은 운공 배치 화면의 `내보내기`로 버전 정보가 포함된 JSON 파일로 저장하고 `가져오기`로 복원할 수 있습니다. 가져올 때 공법 ID, 중복 배치, 정·역련, 정해 여부, 만능공법칸과 현재 버전의 최대 운공칸을 검증합니다. 제작 버전이 현재 데이터와 달라도 모든 ID와 운공칸이 유효한 경우에만 적용하며 버전 차이를 화면에 표시합니다.
 
 ## 업데이트 대응 방식
 
@@ -53,6 +57,8 @@ ILSpy CLI는 `--ilspy` 또는 `ILSPYCMD`로 지정할 수 있습니다. 배포 �
 ## GitHub 자동 갱신
 
 `.github/workflows/extract-game-data.yml`은 게임이 설치된 self-hosted Windows runner에서 수동 또는 매일 실행합니다. 새 데이터나 운공 UI 에셋에 변화가 있을 때만 추출 결과를 커밋합니다. 게임 전체 파일은 저장소에 올리지 않습니다.
+
+`.github/workflows/release-extractor.yml`은 GitHub의 Windows와 Linux 러너에서 각 운영체제용 런타임을 만들고 실제 실행 검사를 통과한 자산만 릴리스합니다. 두 압축 파일과 SHA-256 목록은 같은 워크플로에서 생성됩니다.
 
 ## 공략 게시판과 개인정보
 

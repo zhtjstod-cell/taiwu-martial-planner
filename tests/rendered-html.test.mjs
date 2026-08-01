@@ -27,6 +27,11 @@ test("server-renders the Taiwu planner", async () => {
   assert.match(html, /품 분류/);
   assert.match(html, /고품 → 저품/);
   assert.match(html, /조건 없이 간단하게 최대 운공칸에 도달할 수 있습니다/);
+  assert.match(html, /현재 프리셋 내보내기/);
+  assert.match(html, /운공안 파일 가져오기/);
+  assert.equal((html.match(/data-plan-index=/g) || []).length, 6);
+  assert.match(html, /GitHub 추출기/);
+  assert.match(html, /taiwu-martial-planner\/releases/);
   for (let element = 0; element <= 5; element += 1) assert.match(html, new RegExp(`skill-seal element-${element}`));
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton/i);
 });

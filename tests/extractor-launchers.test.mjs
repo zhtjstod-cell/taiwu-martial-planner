@@ -20,11 +20,13 @@ test("Windows BAT stays ASCII-only and delegates to PowerShell files", () => {
   }
 });
 
-test("Windows launcher distinguishes a missing SDK from a .NET runtime", () => {
+test("Windows launcher uses only bundled Node, Python executable and .NET runtime", () => {
   const launcher = readFileSync(join(root, "windows-extractor", "run-extractor.ps1"), "utf8");
-  assert.match(launcher, /--list-sdks/);
-  assert.match(launcher, /SDK가 없거나/);
-  assert.match(launcher, /\[version\]"8\.0\.0"/);
+  assert.match(launcher, /\.runtime/);
+  assert.match(launcher, /node\\node\.exe/);
+  assert.match(launcher, /Join-Path \$dotnetRoot "dotnet\.exe"/);
+  assert.match(launcher, /taiwu-ui-extractor\.exe/);
+  assert.doesNotMatch(launcher, /pip.+install|dotnet.+tool.+install|--list-sdks/si);
   assert.match(launcher, /find-taiwu-game\.ps1/);
 });
 
@@ -50,10 +52,26 @@ test("Linux launcher targets native Steam and Proton game files", () => {
   const finder = readFileSync(join(root, "linux-extractor", "find-taiwu-game.sh"), "utf8");
   assert.match(launcher, /^#!\/usr\/bin\/env bash/);
   assert.match(launcher, /set -Eeuo pipefail/);
-  assert.match(launcher, /dotnet --list-sdks/);
+  assert.match(launcher, /runtime\/node\/node/);
+  assert.match(launcher, /runtime\/dotnet/);
+  assert.match(launcher, /taiwu-ui-extractor/);
+  assert.doesNotMatch(launcher, /pip install|dotnet tool install|--list-sdks/);
   assert.match(launcher, /find-taiwu-game\.sh/);
   assert.match(finder, /com\.valvesoftware\.Steam/);
   assert.match(finder, /libraryfolders\.vdf/);
   assert.match(finder, /appmanifest_838350\.acf/);
   assert.doesNotMatch(launcher + finder, /wine|compatdata/i);
+});
+
+test("portable release workflow builds native runtime bundles on both operating systems", () => {
+  const workflow = readFileSync(join(root, ".github", "workflows", "release-extractor.yml"), "utf8");
+  const packager = readFileSync(join(root, "scripts", "build-extractor-release.mjs"), "utf8");
+  assert.match(workflow, /windows-latest/);
+  assert.match(workflow, /ubuntu-22\.04/);
+  assert.match(workflow, /node-version: 22\.13\.1/);
+  assert.match(workflow, /PyInstaller/);
+  assert.match(workflow, /dotnet-install/);
+  assert.match(workflow, /ilspycmd --version 9\.1\.0\.7988/);
+  assert.match(packager, /Portable runtime is incomplete/);
+  assert.match(packager, /cpSync\(runtimeRoot/);
 });

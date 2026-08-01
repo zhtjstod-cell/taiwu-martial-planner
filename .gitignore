@@ -45,7 +45,10 @@ next-env.d.ts
 # local extraction/development artifacts
 /extractor/.cache/
 /extractor/__pycache__/
+**/__pycache__/
 /.release-staging/
+/.release-runtime/
+/.release-work/
 /release/
 /windows-extractor/.runtime/
 /windows-extractor/output/

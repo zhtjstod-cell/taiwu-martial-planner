@@ -1,4 +1,4 @@
-태오회권 무공 추출기 1.1 · Windows
+태오회권 무공 추출기 1.2 · Windows 포터블
 ==================================
 
 1. ZIP을 완전히 압축 해제합니다.
@@ -12,17 +12,11 @@ UTF-8 BOM으로 저장된 `run-extractor.ps1`이 담당하고, Steam 경로 탐�
 
 필수 프로그램
 -------------
-- Windows 10/11
-- Node.js 22.13 이상
-- Python 3.11 이상
-- .NET 8 이상 SDK (`dotnet --list-sdks`에서 8.0 이상이 보여야 함)
+- 64비트 Windows 10/11
 
-`.NET Runtime`만 설치되어 있으면 ILSpy 도구를 설치할 수 없습니다. 아래 주소에서 반드시
-`.NET SDK`를 설치하세요.
-https://dotnet.microsoft.com/download/dotnet/8.0
-
-처음 실행할 때 전용 `.runtime` 폴더에 UnityPy와 ILSpy를 설치합니다. 관리자 권한은 필요하지
-않으며 게임 파일은 읽기만 합니다.
+Node.js, Python, UnityPy, .NET 8 런타임과 ILSpy가 ZIP의 `.runtime`에 포함되어 있습니다.
+별도 설치, 인터넷 연결, 관리자 권한이 필요하지 않습니다. `.runtime`을 삭제하거나 ZIP 안에서
+직접 실행하지 말고 전체 폴더를 먼저 압축 해제하세요.
 
 개인정보 및 배포 범위
 --------------------
