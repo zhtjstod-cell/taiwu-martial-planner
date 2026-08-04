@@ -21,6 +21,9 @@ test("server-renders the Taiwu planner", async () => {
   assert.match(html, /구색옥선법/);
   assert.match(html, /운공 배치/);
   assert.match(html, /만능공법칸/);
+  assert.match(html, /data-equipped-skill-name=/);
+  assert.match(html, /equipped-card-name/);
+  assert.doesNotMatch(html, /기맥 운행/);
   assert.match(html, /데이터 업로드/);
   assert.match(html, /공략 게시판/);
   assert.match(html, /관계 제보/);

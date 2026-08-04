@@ -23,6 +23,60 @@ export function validateTitle(value: unknown) {
   return title;
 }
 
+export function validateContent(value: unknown) {
+  const content = typeof value === "string" ? value.replace(/\r\n?/g, "\n").trim() : "";
+  if (content.length < 10 || content.length > 2000) throw new Error("공략 본문은 10~2000자로 입력해 주세요.");
+  if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(content)) throw new Error("공략 본문에 제어 문자를 넣을 수 없습니다.");
+  return content;
+}
+
+export function validatePassword(value: unknown) {
+  const password = typeof value === "string" ? value.normalize("NFKC") : "";
+  if (password.length < 8 || password.length > 72) throw new Error("비밀번호는 8~72자로 입력해 주세요.");
+  if (/[\u0000-\u001f\u007f]/.test(password)) throw new Error("비밀번호에 제어 문자를 넣을 수 없습니다.");
+  return password;
+}
+
+const passwordEncoder = new TextEncoder();
+const passwordIterations = 100_000;
+
+function toHex(value: ArrayBuffer | Uint8Array) {
+  const bytes = value instanceof Uint8Array ? value : new Uint8Array(value);
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function fromHex(value: string) {
+  if (!/^[0-9a-f]+$/i.test(value) || value.length % 2) throw new Error("저장된 비밀번호 정보가 손상되었습니다.");
+  return Uint8Array.from(value.match(/.{2}/g) || [], (byte) => Number.parseInt(byte, 16));
+}
+
+async function derivePasswordHash(password: string, saltHex: string, iterations: number) {
+  const key = await crypto.subtle.importKey("raw", passwordEncoder.encode(password), "PBKDF2", false, ["deriveBits"]);
+  const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt: fromHex(saltHex), iterations }, key, 256);
+  return toHex(bits);
+}
+
+export async function createPasswordRecord(passwordValue: unknown) {
+  const password = validatePassword(passwordValue);
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const saltHex = toHex(salt);
+  const digest = await derivePasswordHash(password, saltHex, passwordIterations);
+  return { passwordHash: `pbkdf2-sha256$${passwordIterations}$${digest}`, passwordSalt: saltHex };
+}
+
+export async function verifyPassword(passwordValue: unknown, storedHash: string | null, saltHex: string | null) {
+  if (!storedHash || !saltHex) return false;
+  const password = validatePassword(passwordValue);
+  const [algorithm, iterationsText, expected] = storedHash.split("$");
+  const iterations = Number(iterationsText);
+  if (algorithm !== "pbkdf2-sha256" || !Number.isInteger(iterations) || iterations < 100_000 || iterations > passwordIterations || !/^[0-9a-f]{64}$/i.test(expected || "")) return false;
+  const actual = await derivePasswordHash(password, saltHex, iterations);
+  if (actual.length !== expected.length) return false;
+  let difference = 0;
+  for (let index = 0; index < actual.length; index += 1) difference |= actual.charCodeAt(index) ^ expected.charCodeAt(index);
+  return difference === 0;
+}
+
 export async function visitorHash(request: Request) {
   const headers = request.headers;
   const ip = headers.get("cf-connecting-ip") || headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "local";
@@ -36,6 +90,6 @@ export async function visitorHash(request: Request) {
 
 export function errorResponse(error: unknown, fallbackStatus = 400) {
   const message = error instanceof Error ? error.message : "요청을 처리하지 못했습니다.";
-  const databaseMissing = /no such table|strategy_builds|strategy_votes|relation_reports/.test(message);
+  const databaseMissing = /no such table|no such column|strategy_builds|strategy_votes|relation_reports/.test(message);
   return Response.json({ error: databaseMissing ? "게시판 데이터베이스 준비 중입니다." : message }, { status: databaseMissing ? 503 : fallbackStatus });
 }

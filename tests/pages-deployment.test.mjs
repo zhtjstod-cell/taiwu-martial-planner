@@ -86,6 +86,75 @@ test("Pages relation-report API validates evidence and stores only HMAC-scoped m
   assert.equal(listedBody.reports[0].evidence, "봉금 저항으로 공법 차단을 막는다.");
 });
 
+test("strategy passwords are hashed and gate body editing and deletion", async () => {
+  const workerUrl = new URL(`../.pages-deploy/_worker.js?strategy-auth=${process.pid}-${Date.now()}`, import.meta.url);
+  const { default: worker } = await import(workerUrl.href);
+  const calls = [];
+  let passwordHash = null;
+  let passwordSalt = null;
+  const db = {
+    prepare(sql) {
+      const call = { sql, values: [] };
+      calls.push(call);
+      const statement = {
+        bind(...values) { call.values = values; return statement; },
+        async first() {
+          if (/SELECT id FROM strategy_builds WHERE author_hash/.test(sql)) return null;
+          if (/INSERT INTO strategy_builds/.test(sql)) {
+            passwordHash = call.values[5];
+            passwordSalt = call.values[6];
+            return { id: 41 };
+          }
+          if (/SELECT password_hash, password_salt/.test(sql)) return { password_hash: passwordHash, password_salt: passwordSalt };
+          return null;
+        },
+        async all() {
+          if (!/FROM strategy_builds/.test(sql)) return { results: [] };
+          return { results: [{ id: 41, title: "독 운용 공략", content: "독을 먼저 누적한 뒤 발작시키는 운용법입니다.", dataset_version: "test", plan_json: JSON.stringify({ equipped: [{ skillId: 1, mode: "direct", mastered: false }], genericAllocation: [0, 0, 0, 0], maxSlots: false }), created_at: 1, updated_at: 1, votes: 0 }] };
+        },
+        async run() { return { meta: { changes: 1 } }; },
+      };
+      return statement;
+    },
+  };
+  const env = { DB: db, VOTE_HMAC_SECRET: "test-secret", ASSETS: { fetch: async () => new Response("asset") } };
+  const password = "correct-password-123";
+  const plan = { equipped: [{ skillId: 1, mode: "direct", mastered: false }], genericAllocation: [0, 0, 0, 0], maxSlots: false };
+  const created = await worker.fetch(new Request("https://example.test/api/strategies", { method: "POST", headers: { "content-type": "application/json", "cf-connecting-ip": "192.0.2.20" }, body: JSON.stringify({ title: "독 운용 공략", content: "독을 먼저 누적한 뒤 발작시키는 운용법입니다.", password, datasetVersion: "test", plan }) }), env);
+  assert.equal(created.status, 201);
+  const insert = calls.find((call) => /INSERT INTO strategy_builds/.test(call.sql));
+  assert.equal(insert.values.length, 8);
+  assert.ok(!insert.values.includes(password));
+  assert.match(passwordHash, /^pbkdf2-sha256\$100000\$[0-9a-f]{64}$/);
+  assert.match(passwordSalt, /^[0-9a-f]{32}$/);
+
+  const wrong = await worker.fetch(new Request("https://example.test/api/strategies/41", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ title: "수정 제목", content: "수정된 공략 본문은 열 자를 넘깁니다.", password: "wrong-password-123" }) }), env);
+  assert.equal(wrong.status, 403);
+  assert.equal(calls.filter((call) => /UPDATE strategy_builds/.test(call.sql)).length, 0);
+
+  const updated = await worker.fetch(new Request("https://example.test/api/strategies/41", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ title: "수정 제목", content: "수정된 공략 본문은 열 자를 넘깁니다.", password }) }), env);
+  assert.equal(updated.status, 200);
+  assert.equal(calls.filter((call) => /UPDATE strategy_builds/.test(call.sql)).length, 1);
+
+  const listed = await worker.fetch(new Request("https://example.test/api/strategies"), env);
+  const listedBody = await listed.json();
+  assert.equal(listedBody.strategies[0].content, "독을 먼저 누적한 뒤 발작시키는 운용법입니다.");
+  assert.doesNotMatch(JSON.stringify(listedBody), /password|pbkdf2|correct-password/i);
+
+  const deleted = await worker.fetch(new Request("https://example.test/api/strategies/41", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ password }) }), env);
+  assert.equal(deleted.status, 200);
+  assert.equal(calls.filter((call) => /DELETE FROM strategy_builds/.test(call.sql)).length, 1);
+});
+
+test("strategy body and password migration preserves legacy posts", async () => {
+  const migration = await readFile(new URL("../drizzle/0002_swift_zzzax.sql", import.meta.url), "utf8");
+  assert.match(migration, /ADD `content` text DEFAULT '' NOT NULL/);
+  assert.match(migration, /ADD `password_hash` text/);
+  assert.match(migration, /ADD `password_salt` text/);
+  assert.match(migration, /ADD `updated_at` integer/);
+  assert.doesNotMatch(migration, /UPDATE `?strategy_builds`?.*password/is);
+});
+
 test("all six internal-energy schools keep their Korean names", async () => {
   const names = new Set();
   for (let shard = 0; shard < 8; shard += 1) {

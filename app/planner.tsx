@@ -3,30 +3,37 @@
 import {
   BookOpenText,
   Check,
+  ChevronDown,
   ChevronRight,
+  ChevronUp,
   Database,
+  Eye,
   FileDown,
   FileUp,
   GitCompareArrows,
   GripVertical,
   Hammer,
+  LockKeyhole,
   MessageSquarePlus,
   Minus,
   Plus,
+  Pencil,
   RotateCcw,
   Ruler,
   Search,
+  Save,
   Send,
   ShieldCheck,
   Sparkles,
   Swords,
   ThumbsUp,
+  Trash2,
   UploadCloud,
   Users,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties } from "react";
+import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import rawManifest from "./data/combat-skills.json";
 import rawSkills0 from "./data/combat-skills-0.json";
 import rawSkills1 from "./data/combat-skills-1.json";
@@ -114,7 +121,12 @@ type Skill = {
 type Equipped = { skillId: number; mode: Mode; mastered: boolean };
 type Plan = { equipped: Equipped[]; genericAllocation: number[]; maxSlots: boolean };
 type Relation = RawRelation & { skill: Skill };
-type StrategyEntry = { id: number; title: string; datasetVersion: string; createdAt: number; votes: number; plan: Plan };
+type RelationPreview = RawRelation & {
+  relationType: "synergy" | "counter";
+  subjectSkillId: number;
+  subjectMode: Mode;
+};
+type StrategyEntry = { id: number; title: string; content: string; datasetVersion: string; createdAt: number; updatedAt: number | null; votes: number; plan: Plan };
 type RelationReportEntry = {
   id: number;
   relationType: "synergy" | "counter";
@@ -348,7 +360,19 @@ export default function Planner() {
   const [strategies, setStrategies] = useState<StrategyEntry[]>([]);
   const [boardLoading, setBoardLoading] = useState(false);
   const [strategyTitle, setStrategyTitle] = useState("");
+  const [strategyContent, setStrategyContent] = useState("");
+  const [strategyPassword, setStrategyPassword] = useState("");
+  const [strategyPasswordConfirm, setStrategyPasswordConfirm] = useState("");
   const [boardMessage, setBoardMessage] = useState("");
+  const [strategyDetailId, setStrategyDetailId] = useState<number | null>(null);
+  const [strategyDetailMode, setStrategyDetailMode] = useState<"view" | "edit" | "delete">("view");
+  const [strategyDetailCollapsed, setStrategyDetailCollapsed] = useState(false);
+  const [strategyDetailPosition, setStrategyDetailPosition] = useState<{ x: number; y: number } | null>(null);
+  const [strategyEditTitle, setStrategyEditTitle] = useState("");
+  const [strategyEditContent, setStrategyEditContent] = useState("");
+  const [strategyEditPassword, setStrategyEditPassword] = useState("");
+  const strategyDetailRef = useRef<HTMLElement>(null);
+  const strategyDetailDragRef = useRef<{ pointerId: number; offsetX: number; offsetY: number } | null>(null);
   const [reportBoardOpen, setReportBoardOpen] = useState(false);
   const [reports, setReports] = useState<RelationReportEntry[]>([]);
   const [reportLoading, setReportLoading] = useState(false);
@@ -366,6 +390,13 @@ export default function Planner() {
   const [selectedId, setSelectedId] = useState(287);
   const [mode, setMode] = useState<Mode>("direct");
   const [analysisTab, setAnalysisTab] = useState<"synergy" | "counter">("synergy");
+  const [relationPreview, setRelationPreview] = useState<RelationPreview | null>(null);
+  const [relationPreviewMode, setRelationPreviewMode] = useState<Mode>("direct");
+  const [relationPreviewCollapsed, setRelationPreviewCollapsed] = useState(false);
+  const [relationPreviewPosition, setRelationPreviewPosition] = useState<{ x: number; y: number } | null>(null);
+  const relationPreviewRef = useRef<HTMLElement>(null);
+  const relationPreviewDragRef = useRef<{ pointerId: number; offsetX: number; offsetY: number } | null>(null);
+  const relationPreviewTriggerRef = useRef<HTMLButtonElement | null>(null);
   const [activePlan, setActivePlan] = useState(0);
   const [plans, setPlans] = useState<Plan[]>(migratePlans(null));
   const [storageReady, setStorageReady] = useState(false);
@@ -434,6 +465,12 @@ export default function Planner() {
   const relations = (selected.relations?.[mode]?.[analysisTab] || []).map((relation) => ({ ...relation, skill: skills.find((skill) => skill.id === relation.skillId)! })).filter((relation): relation is Relation => Boolean(relation.skill));
   const synergies = selected.relations?.[mode]?.synergy || [];
   const counters = selected.relations?.[mode]?.counter || [];
+  const relationPreviewSkill = relationPreview ? skills.find((skill) => skill.id === relationPreview.skillId) || null : null;
+  const relationPreviewSubject = relationPreview ? skills.find((skill) => skill.id === relationPreview.subjectSkillId) || null : null;
+  const relationPreviewEffect = relationPreviewSkill ? effectFor(relationPreviewSkill, relationPreviewMode) : null;
+  const relationPreviewFacets = relationPreviewEffect ? [...new Set([...relationPreviewEffect.analysis.mechanicLabels, ...relationPreviewEffect.analysis.triggers, ...relationPreviewEffect.analysis.concepts, ...relationPreviewEffect.analysis.affectedFields, ...relationPreviewEffect.tags])].slice(0, 10) : [];
+  const relationPreviewEquipped = relationPreviewSkill ? equipped.find((entry) => entry.skillId === relationPreviewSkill.id) : undefined;
+  const strategyDetail = strategyDetailId === null ? null : strategies.find((entry) => entry.id === strategyDetailId) || null;
   const reportSubjectSkill = skills.find((skill) => skill.id === reportSubject.skillId) || selected;
   const reportRelatedSkill = reportRelatedId === null ? null : skills.find((skill) => skill.id === reportRelatedId) || null;
 
@@ -459,10 +496,82 @@ export default function Planner() {
     return { ...current, genericAllocation: next };
   });
 
-  const selectRelation = (relation: Relation) => {
-    setSelectedId(relation.skill.id);
-    setMode(relation.mode);
+  const openRelationPreview = (relation: Relation, trigger: HTMLButtonElement) => {
+    relationPreviewTriggerRef.current = trigger;
+    setRelationPreview({
+      skillId: relation.skillId,
+      mode: relation.mode,
+      score: relation.score,
+      reason: relation.reason,
+      basis: relation.basis,
+      resource: relation.resource,
+      evidence: relation.evidence,
+      relationType: analysisTab,
+      subjectSkillId: selected.id,
+      subjectMode: mode,
+    });
+    setRelationPreviewMode(relation.mode);
+    setRelationPreviewCollapsed(false);
   };
+
+  const closeRelationPreview = () => {
+    setRelationPreview(null);
+    window.requestAnimationFrame(() => relationPreviewTriggerRef.current?.focus());
+  };
+
+  const beginRelationPreviewDrag = (event: ReactPointerEvent<HTMLElement>) => {
+    if ((event.target as HTMLElement).closest("button")) return;
+    const panel = relationPreviewRef.current;
+    if (!panel) return;
+    const bounds = panel.getBoundingClientRect();
+    relationPreviewDragRef.current = { pointerId: event.pointerId, offsetX: event.clientX - bounds.left, offsetY: event.clientY - bounds.top };
+    setRelationPreviewPosition({ x: bounds.left, y: bounds.top });
+    event.currentTarget.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  };
+
+  const moveRelationPreview = (event: ReactPointerEvent<HTMLElement>) => {
+    const drag = relationPreviewDragRef.current;
+    const panel = relationPreviewRef.current;
+    if (!drag || drag.pointerId !== event.pointerId || !panel) return;
+    const maxX = Math.max(8, window.innerWidth - panel.offsetWidth - 8);
+    const maxY = Math.max(8, window.innerHeight - 48);
+    setRelationPreviewPosition({
+      x: Math.min(maxX, Math.max(8, event.clientX - drag.offsetX)),
+      y: Math.min(maxY, Math.max(8, event.clientY - drag.offsetY)),
+    });
+  };
+
+  const endRelationPreviewDrag = (event: ReactPointerEvent<HTMLElement>) => {
+    if (relationPreviewDragRef.current?.pointerId !== event.pointerId) return;
+    relationPreviewDragRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+
+  useEffect(() => {
+    if (!relationPreview) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setRelationPreview(null);
+      window.requestAnimationFrame(() => relationPreviewTriggerRef.current?.focus());
+    };
+    const keepInViewport = () => {
+      const panel = relationPreviewRef.current;
+      if (!panel) return;
+      setRelationPreviewPosition((current) => current ? {
+        x: Math.min(Math.max(8, window.innerWidth - panel.offsetWidth - 8), Math.max(8, current.x)),
+        y: Math.min(Math.max(8, window.innerHeight - 48), Math.max(8, current.y)),
+      } : current);
+    };
+    const frame = window.requestAnimationFrame(keepInViewport);
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("resize", keepInViewport);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("resize", keepInViewport);
+    };
+  }, [relationPreview, relationPreviewCollapsed]);
 
   const importDataset = async (file: File) => {
     setDatasetMessage("추출 파일 검증 중…");
@@ -473,6 +582,7 @@ export default function Planner() {
       await saveCustomDataset(valid);
       setDataset(valid);
       setCustomDataset(true);
+      setRelationPreview(null);
       setSelectedId(valid.skills.some((skill) => skill.id === selectedId) ? selectedId : valid.skills[0].id);
       setDatasetMessage(`${valid.meta.datasetVersion || valid.meta.sourceHash.slice(0, 12)} · ${valid.skills.length}식 적용 완료`);
     } catch (error) {
@@ -521,6 +631,7 @@ export default function Planner() {
     await saveCustomDataset(null);
     setDataset(defaultDataset);
     setCustomDataset(false);
+    setRelationPreview(null);
     setSelectedId(defaultDataset.skills.some((skill) => skill.id === selectedId) ? selectedId : defaultDataset.skills[0].id);
     setDatasetMessage("사이트 기본 데이터로 복귀했습니다.");
   };
@@ -529,7 +640,7 @@ export default function Planner() {
     setBoardLoading(true);
     try {
       const response = await fetch("/api/strategies", { cache: "no-store" });
-      const body = await response.json() as { strategies?: StrategyEntry[]; error?: string };
+      const body = await response.json().catch(() => ({ error: "공략 게시판 API가 응답하지 않습니다." })) as { strategies?: StrategyEntry[]; error?: string };
       if (!response.ok) throw new Error(body.error || "공략을 불러오지 못했습니다.");
       setStrategies(body.strategies || []);
       setBoardMessage("");
@@ -541,29 +652,152 @@ export default function Planner() {
   };
 
   const openBoard = () => {
+    setRelationPreview(null);
     setBoardOpen(true);
     void loadStrategies();
   };
 
+  const closeBoard = () => {
+    setBoardOpen(false);
+    setStrategyDetailId(null);
+    setStrategyDetailMode("view");
+    setStrategyPassword("");
+    setStrategyPasswordConfirm("");
+    setStrategyEditPassword("");
+  };
+
   const publishStrategy = async () => {
+    if (strategyPassword !== strategyPasswordConfirm) {
+      setBoardMessage("비밀번호 확인이 일치하지 않습니다.");
+      return;
+    }
     setBoardLoading(true);
     try {
       const response = await fetch("/api/strategies", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ title: strategyTitle, datasetVersion: meta.datasetVersion || meta.sourceHash.slice(0, 12), plan }),
+        body: JSON.stringify({ title: strategyTitle, content: strategyContent, password: strategyPassword, datasetVersion: meta.datasetVersion || meta.sourceHash.slice(0, 12), plan }),
       });
-      const body = await response.json() as { error?: string };
+      const body = await response.json().catch(() => ({ error: "공략 게시판 API가 응답하지 않습니다." })) as { error?: string };
       if (!response.ok) throw new Error(body.error || "공략을 등록하지 못했습니다.");
       setStrategyTitle("");
+      setStrategyContent("");
       await loadStrategies();
-      setBoardMessage("현재 운공 조합을 등록했습니다.");
+      setBoardMessage("현재 운공 조합과 공략 본문을 등록했습니다.");
     } catch (error) {
       setBoardMessage(error instanceof Error ? error.message : "공략을 등록하지 못했습니다.");
     } finally {
+      setStrategyPassword("");
+      setStrategyPasswordConfirm("");
       setBoardLoading(false);
     }
   };
+
+  const openStrategyDetail = (entry: StrategyEntry) => {
+    setStrategyDetailId(entry.id);
+    setStrategyDetailMode("view");
+    setStrategyDetailCollapsed(false);
+    setStrategyEditTitle(entry.title);
+    setStrategyEditContent(entry.content || "");
+    setStrategyEditPassword("");
+  };
+
+  const saveStrategyEdit = async () => {
+    if (!strategyDetail) return;
+    setBoardLoading(true);
+    try {
+      const response = await fetch(`/api/strategies/${strategyDetail.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ title: strategyEditTitle, content: strategyEditContent, password: strategyEditPassword }),
+      });
+      const body = await response.json().catch(() => ({ error: "공략 수정 API가 응답하지 않습니다." })) as { error?: string };
+      if (!response.ok) throw new Error(body.error || "공략을 수정하지 못했습니다.");
+      await loadStrategies();
+      setStrategyDetailMode("view");
+      setBoardMessage("공략 제목과 본문을 수정했습니다.");
+    } catch (error) {
+      setBoardMessage(error instanceof Error ? error.message : "공략을 수정하지 못했습니다.");
+    } finally {
+      setStrategyEditPassword("");
+      setBoardLoading(false);
+    }
+  };
+
+  const deleteStrategy = async () => {
+    if (!strategyDetail) return;
+    setBoardLoading(true);
+    try {
+      const response = await fetch(`/api/strategies/${strategyDetail.id}`, {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ password: strategyEditPassword }),
+      });
+      const body = await response.json().catch(() => ({ error: "공략 삭제 API가 응답하지 않습니다." })) as { error?: string };
+      if (!response.ok) throw new Error(body.error || "공략을 삭제하지 못했습니다.");
+      setStrategyDetailId(null);
+      setStrategyDetailMode("view");
+      await loadStrategies();
+      setBoardMessage("공략을 삭제했습니다.");
+    } catch (error) {
+      setBoardMessage(error instanceof Error ? error.message : "공략을 삭제하지 못했습니다.");
+    } finally {
+      setStrategyEditPassword("");
+      setBoardLoading(false);
+    }
+  };
+
+  const beginStrategyDetailDrag = (event: ReactPointerEvent<HTMLElement>) => {
+    if ((event.target as HTMLElement).closest("button")) return;
+    const panel = strategyDetailRef.current;
+    if (!panel) return;
+    const bounds = panel.getBoundingClientRect();
+    strategyDetailDragRef.current = { pointerId: event.pointerId, offsetX: event.clientX - bounds.left, offsetY: event.clientY - bounds.top };
+    setStrategyDetailPosition({ x: bounds.left, y: bounds.top });
+    event.currentTarget.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  };
+
+  const moveStrategyDetail = (event: ReactPointerEvent<HTMLElement>) => {
+    const drag = strategyDetailDragRef.current;
+    const panel = strategyDetailRef.current;
+    if (!drag || drag.pointerId !== event.pointerId || !panel) return;
+    setStrategyDetailPosition({
+      x: Math.min(Math.max(8, window.innerWidth - panel.offsetWidth - 8), Math.max(8, event.clientX - drag.offsetX)),
+      y: Math.min(Math.max(8, window.innerHeight - 48), Math.max(8, event.clientY - drag.offsetY)),
+    });
+  };
+
+  const endStrategyDetailDrag = (event: ReactPointerEvent<HTMLElement>) => {
+    if (strategyDetailDragRef.current?.pointerId !== event.pointerId) return;
+    strategyDetailDragRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+
+  useEffect(() => {
+    if (!strategyDetail) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setStrategyDetailId(null);
+      setStrategyEditPassword("");
+    };
+    const keepInViewport = () => {
+      const panel = strategyDetailRef.current;
+      if (!panel) return;
+      setStrategyDetailPosition((current) => current ? {
+        x: Math.min(Math.max(8, window.innerWidth - panel.offsetWidth - 8), Math.max(8, current.x)),
+        y: Math.min(Math.max(8, window.innerHeight - 48), Math.max(8, current.y)),
+      } : current);
+    };
+    const frame = window.requestAnimationFrame(keepInViewport);
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("resize", keepInViewport);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("resize", keepInViewport);
+    };
+  }, [strategyDetail, strategyDetailCollapsed]);
 
   const voteStrategy = async (id: number) => {
     try {
@@ -681,11 +915,6 @@ export default function Planner() {
           <div className="board-heading"><div><span className="eyebrow">운공 프리셋</span><h1>운공 배치</h1></div><div className="board-heading-actions"><div className="legend"><i className="direct-dot" />정련<i className="reverse-dot" />역련</div><input ref={buildImportRef} className="sr-only" type="file" accept=".json,application/json" onChange={(event) => { const file = event.target.files?.[0]; if (file) void importBuild(file); event.currentTarget.value = ""; }} /><button onClick={exportBuild} title="현재 프리셋 내보내기"><FileDown size={13} /> 내보내기</button><button onClick={() => buildImportRef.current?.click()} title="운공안 파일 가져오기"><FileUp size={13} /> 가져오기</button></div></div>
           <div className="game-board-toolbar"><span className="toolbar-label">프리셋</span><div className="plan-tabs">{plans.map((_, index) => <button key={index} data-plan-index={index + 1} className={activePlan === index ? "active" : ""} onClick={() => setActivePlan(index)}>{index + 1}</button>)}</div><button className={`max-slot-toggle ${plan.maxSlots ? "active" : ""}`} onClick={() => updatePlan((current) => ({ ...current, maxSlots: !current.maxSlots }))}><Check size={12} /> 최대 운공칸</button><span className="max-slot-help">조건 없이 간단하게 최대 운공칸에 도달할 수 있습니다.</span><span className="generic-grid-note">{plan.maxSlots ? <b>계통별 게임 상한 적용</b> : <>만능공법칸 <b>{layout.genericLeft}/{layout.genericPool}</b></>}</span></div>
           <div className="cultivation-layout">
-            <div className="practitioner-core" aria-hidden="true">
-              <span className="original-yuanpan" />
-              <div className="meditation-mark"><span className="head" /><span className="body" /><b>運</b><small>기맥 운행</small></div>
-              <div className="core-elements">{["金", "木", "水", "火", "土"].map((element) => <i key={element}>{element}</i>)}</div>
-            </div>
             <div className="loadout-board">
               {categoryNames.map((name, equipType) => {
                 const entries = equipped.filter((entry) => skills.find((skill) => skill.id === entry.skillId)?.equipType === equipType);
@@ -712,8 +941,8 @@ export default function Planner() {
                           const active = layout.activeSkillIds.has(skill.id);
                           const art = `/game-ui/combatskillicon/sp_combatskillback_${cardArtNames[equipType]}_${skill.gradeIndex ?? Math.max(0, 9 - skill.grade)}.png`;
                           return (
-                            <div key={skill.id} style={{ "--span": cost, "--card-art": `url(${art})` } as React.CSSProperties} className={`equipped-card ${entry.mode} ${active ? "" : "invalid"}`} role="button" tabIndex={0} onClick={() => { setSelectedId(skill.id); setMode(entry.mode); }}>
-                              <SkillSeal skill={skill} small icons={dataset.assets?.combatSkillIcons} /><span><strong>{skill.name}</strong><small>{entry.mode === "direct" ? "정련" : "역련"} · {entry.mastered ? "정해 · " : ""}{cost}칸{active ? "" : " · 운공 실패"}</small></span>
+                            <div key={skill.id} data-equipped-skill-name={skill.name} style={{ "--span": cost, "--card-art": `url(${art})` } as React.CSSProperties} className={`equipped-card ${entry.mode} ${active ? "" : "invalid"}`} role="button" tabIndex={0} aria-label={`${skill.name}, ${entry.mode === "direct" ? "정련" : "역련"}, ${cost}칸`} title={`${skill.name} · ${entry.mode === "direct" ? "정련" : "역련"} · ${entry.mastered ? "정해 · " : ""}${cost}칸${active ? "" : " · 운공 실패"}`} onClick={() => { setSelectedId(skill.id); setMode(entry.mode); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSelectedId(skill.id); setMode(entry.mode); } }}>
+                              <span className="equipped-card-main"><SkillSeal skill={skill} icons={dataset.assets?.combatSkillIcons} /><span className="equipped-card-copy"><small className={entry.mode}>{entry.mode === "direct" ? "正" : "逆"} · {entry.mastered ? "정해 · " : ""}{cost}칸{active ? "" : " · 실패"}</small><strong className={`equipped-card-name ${gradeClass(skill)}`}>{skill.name}</strong></span></span>
                               <button className={`mastery-mini ${entry.mastered ? "active" : ""}`} title="정해: 점유 1칸 감소, 발휘 요구 증가" onClick={(event) => { event.stopPropagation(); toggleMastered(skill.id); }}>精</button>
                               <button className="remove-skill" aria-label={`${skill.name} 제거`} onClick={(event) => { event.stopPropagation(); removeSkill(skill.id); }}><Minus size={12} /></button>
                             </div>
@@ -731,7 +960,7 @@ export default function Planner() {
         </section>
 
         <aside className="analysis-panel panel">
-          <div className="analysis-summary">
+          <div className="analysis-summary" data-primary-skill-id={selected.id}>
             <div className="selected-header"><SkillSeal skill={selected} icons={dataset.assets?.combatSkillIcons} /><div><span>{selected.sectName} · {selected.grade}품 · {selected.typeName}</span><h2 className={gradeClass(selected)}>{selected.name}</h2><small>{selected.equipName} {selected.gridCost}칸</small></div></div>
             <div className="mode-switch" role="tablist" aria-label="수련 방식"><button className={mode === "direct" ? "active direct" : ""} onClick={() => setMode("direct")}><span>正</span> 정련</button><button className={mode === "reverse" ? "active reverse" : ""} onClick={() => setMode("reverse")}><span>逆</span> 역련</button></div>
             {selectedEquipped && <button className={`mastery-toggle ${selectedEquipped.mastered ? "active" : ""}`} onClick={() => toggleMastered(selected.id)}><b>精解 · 정해</b><span>{selectedEquipped.mastered ? `${selected.gridCost}→${selected.masteredGridCost}칸 · 발휘 요구 증가 적용 중` : "점유 1칸 감소 · 발휘 요구 대폭 증가"}</span></button>}
@@ -748,36 +977,120 @@ export default function Planner() {
           <div className="relation-section">
             <div className="relation-tabs"><button className={analysisTab === "synergy" ? "active" : ""} onClick={() => setAnalysisTab("synergy")}><Sparkles size={15} /> 시너지 <span>{synergies.length}</span></button><button className={analysisTab === "counter" ? "active" : ""} onClick={() => setAnalysisTab("counter")}><Swords size={15} /> 카운터 <span>{counters.length}</span></button></div>
             <div className="relation-list">
-              {relations.length ? relations.map((relation, index) => <div key={`${relation.skill.id}-${relation.mode}`} className="relation-card" role="button" tabIndex={0} title={relation.evidence} onClick={() => selectRelation(relation)} onKeyDown={(event) => { if (event.key === "Enter") selectRelation(relation); }}><span className="rank">{String(index + 1).padStart(2, "0")}</span><SkillSeal skill={relation.skill} small icons={dataset.assets?.combatSkillIcons} /><span className="relation-copy"><strong>{relation.skill.name}<em className={relation.mode}>{relation.mode === "direct" ? "정" : "역"}</em><i>{basisNames[relation.basis] || relation.basis}</i></strong><small>{relation.reason}</small></span><button className="quick-add" aria-label={`${relation.skill.name} 배치`} onClick={(event) => { event.stopPropagation(); equipSkill(relation.skill, relation.mode); }}><Plus size={13} /></button><ChevronRight size={15} /></div>) : <div className="empty-relations"><BookOpenText size={24} /><strong>검증 가능한 관계가 없습니다</strong><span>같은 단어만 겹치는 결과는 표시하지 않습니다.</span></div>}
+              {relations.length ? relations.map((relation, index) => <div key={`${relation.skill.id}-${relation.mode}`} className="relation-card" data-relation-skill-id={relation.skill.id} data-relation-mode={relation.mode} data-relation-type={analysisTab}>
+                <button className="relation-open" type="button" title={relation.evidence} aria-haspopup="dialog" aria-controls="relation-preview-window" onClick={(event) => openRelationPreview(relation, event.currentTarget)}>
+                  <span className="rank">{String(index + 1).padStart(2, "0")}</span><SkillSeal skill={relation.skill} small icons={dataset.assets?.combatSkillIcons} /><span className="relation-copy"><strong><span className={`relation-name ${gradeClass(relation.skill)}`}>{relation.skill.name}</span><em className={relation.mode}>{relation.mode === "direct" ? "정" : "역"}</em><i>{basisNames[relation.basis] || relation.basis}</i></strong><small>{relation.reason}</small></span><ChevronRight size={15} />
+                </button>
+                <button className="quick-add" type="button" aria-label={`${relation.skill.name} 배치`} onClick={() => equipSkill(relation.skill, relation.mode)}><Plus size={13} /></button>
+              </div>) : <div className="empty-relations"><BookOpenText size={24} /><strong>검증 가능한 관계가 없습니다</strong><span>같은 단어만 겹치는 결과는 표시하지 않습니다.</span></div>}
             </div>
           </div>
         </aside>
       </section>
 
+      {relationPreview && relationPreviewSkill && relationPreviewEffect && <aside
+        id="relation-preview-window"
+        ref={relationPreviewRef}
+        className={`relation-preview-window ${relationPreviewCollapsed ? "collapsed" : ""}`}
+        style={relationPreviewPosition ? { left: relationPreviewPosition.x, top: relationPreviewPosition.y, right: "auto", bottom: "auto" } : undefined}
+        role="dialog"
+        aria-modal="false"
+        aria-labelledby="relation-preview-title"
+        data-relation-preview-skill-id={relationPreviewSkill.id}
+        data-relation-preview-mode={relationPreviewMode}
+      >
+        <header className="relation-preview-handle" onPointerDown={beginRelationPreviewDrag} onPointerMove={moveRelationPreview} onPointerUp={endRelationPreviewDrag} onPointerCancel={endRelationPreviewDrag}>
+          <GripVertical size={15} aria-hidden="true" />
+          <span className={`relation-preview-kind ${relationPreview.relationType}`}><span aria-hidden="true">{relationPreview.relationType === "synergy" ? <Sparkles size={12} /> : <Swords size={12} />}</span>{relationPreview.relationType === "synergy" ? "시너지" : "카운터"}</span>
+          <div><small>{relationPreviewSubject?.name || "기준 공법"}의 관련 공법</small><strong id="relation-preview-title" className={gradeClass(relationPreviewSkill)}>{relationPreviewSkill.name}</strong></div>
+          <button type="button" aria-label={relationPreviewCollapsed ? "관계 공법 정보 펼치기" : "관계 공법 정보 접기"} aria-expanded={!relationPreviewCollapsed} aria-controls="relation-preview-body" onClick={() => setRelationPreviewCollapsed((current) => !current)}>{relationPreviewCollapsed ? <ChevronUp size={15} /> : <ChevronDown size={15} />}</button>
+          <button type="button" aria-label="관계 공법 정보 닫기" onClick={closeRelationPreview}><X size={15} /></button>
+        </header>
+        {!relationPreviewCollapsed && <div className="relation-preview-body" id="relation-preview-body">
+          <div className="relation-preview-skill">
+            <SkillSeal skill={relationPreviewSkill} icons={dataset.assets?.combatSkillIcons} />
+            <span><small>{relationPreviewSkill.sectName} · {relationPreviewSkill.grade}품 · {relationPreviewSkill.typeName} · {relationPreviewSkill.elementName}</small><strong className={gradeClass(relationPreviewSkill)}>{relationPreviewSkill.name}</strong><em>{relationPreviewSkill.equipName} {relationPreviewSkill.gridCost}칸</em></span>
+          </div>
+          <div className="mode-switch relation-preview-mode" role="tablist" aria-label="관계 공법 수련 방식"><button className={relationPreviewMode === "direct" ? "active direct" : ""} onClick={() => setRelationPreviewMode("direct")}><span>正</span> 정련</button><button className={relationPreviewMode === "reverse" ? "active reverse" : ""} onClick={() => setRelationPreviewMode("reverse")}><span>逆</span> 역련</button></div>
+          <section className={`relation-preview-proof ${relationPreview.relationType}`} aria-label="관계 근거">
+            <span>{basisNames[relationPreview.basis] || relationPreview.basis}{relationPreview.resource ? ` · ${relationPreview.resource}` : ""}</span>
+            <strong>{relationPreview.reason}</strong>
+            <p>{relationPreview.evidence}</p>
+          </section>
+          <div className="effect-card relation-preview-effect">
+            <div className="effect-title"><Sparkles size={15} /><strong>{relationPreviewEffect.short[0] || relationPreviewEffect.name}</strong>{relationPreviewSkill.codeVerified && <span><ShieldCheck size={12} /> 코드 검증</span>}</div>
+            <p>{relationPreviewEffect.description || "이 수련 방식에는 별도 특수 효과 설명이 없습니다."}</p>
+            <div className="tag-list">{relationPreviewFacets.map((tag) => <span key={tag}>#{tag}</span>)}</div>
+          </div>
+          {(relationPreviewSkill.combat.recommendedWeaponName || relationPreviewSkill.combat.fixedWeaponName || relationPreviewSkill.combat.trickCost.length > 0 || (relationPreviewSkill.combat.minDistance !== null && relationPreviewSkill.combat.maxDistance !== null)) && <div className="combat-conditions relation-preview-conditions"><div className="condition-row"><Hammer size={14} /><span><small>{relationPreviewSkill.combat.fixedWeaponName ? "고정 무기" : "추천 무기"}</small><strong>{relationPreviewSkill.combat.fixedWeaponName || relationPreviewSkill.combat.recommendedWeaponName || "제한 없음"}</strong></span></div>{relationPreviewSkill.combat.minDistance !== null && relationPreviewSkill.combat.maxDistance !== null && <div className="condition-row"><Ruler size={14} /><span><small>유효 사거리</small><strong>{relationPreviewSkill.combat.minDistance / 10} – {relationPreviewSkill.combat.maxDistance / 10}</strong></span></div>}{relationPreviewSkill.combat.trickCost.length > 0 && <div className="condition-row"><Swords size={14} /><span><small>필요 식</small><strong>{relationPreviewSkill.combat.trickCost.map((cost) => `${cost.name} ×${cost.count}`).join(" · ")}</strong></span></div>}</div>}
+          <button className="equip-button relation-preview-equip" onClick={() => equipSkill(relationPreviewSkill, relationPreviewMode)}><Plus size={17} /> {relationPreviewEquipped ? "선택 수련으로 변경" : "운공판에 배치"}</button>
+        </div>}
+      </aside>}
+
       {boardOpen && <div className="board-overlay" role="dialog" aria-modal="true" aria-label="공략 게시판">
         <div className="strategy-board">
-          <header><div><span className="eyebrow">유저 운공 조합</span><h2>공략 게시판</h2></div><button className="icon-button" onClick={() => setBoardOpen(false)} aria-label="게시판 닫기"><X size={16} /></button></header>
-          <div className="strategy-publish">
-            <label><span>조합 제목만 입력</span><input maxLength={32} value={strategyTitle} onChange={(event) => setStrategyTitle(event.target.value)} placeholder="예: 구색옥선법 기교진기 봉쇄 조합" /></label>
-            <button disabled={boardLoading || !strategyTitle.trim() || !plan.equipped.length} onClick={() => void publishStrategy()}><UploadCloud size={14} /> 현재 프리셋 등록</button>
-            <small>설명·댓글은 받지 않으며, 데이터 버전과 배치된 무공만 공개됩니다.</small>
-          </div>
+          <header><div><span className="eyebrow">유저 운공 조합</span><h2>공략 게시판</h2></div><button className="icon-button" onClick={closeBoard} aria-label="게시판 닫기"><X size={16} /></button></header>
+          <form className="strategy-publish" onSubmit={(event) => { event.preventDefault(); void publishStrategy(); }}>
+            <label className="strategy-title-field"><span>공략 제목</span><input maxLength={32} value={strategyTitle} onChange={(event) => setStrategyTitle(event.target.value)} placeholder="예: 구색옥선법 기교진기 봉쇄 조합" /></label>
+            <label><span>비밀번호</span><input type="password" minLength={8} maxLength={72} autoComplete="new-password" value={strategyPassword} onChange={(event) => setStrategyPassword(event.target.value)} placeholder="8자 이상" /></label>
+            <label><span>비밀번호 확인</span><input type="password" minLength={8} maxLength={72} autoComplete="new-password" value={strategyPasswordConfirm} onChange={(event) => setStrategyPasswordConfirm(event.target.value)} placeholder="한 번 더 입력" /></label>
+            <label className="strategy-content-field"><span>공략 본문</span><textarea minLength={10} maxLength={2000} value={strategyContent} onChange={(event) => setStrategyContent(event.target.value)} placeholder="운용 방법, 핵심 연계, 상대법 등 공략 내용을 10자 이상 적어 주세요." /><small>{strategyContent.trim().length}/2000</small></label>
+            <div className="strategy-publish-footer"><small><LockKeyhole size={11} /> 비밀번호는 암호화해 저장하며 복구할 수 없습니다. 수정·삭제할 때 다시 필요합니다.</small><button type="submit" disabled={boardLoading || strategyTitle.trim().length < 2 || strategyContent.trim().length < 10 || strategyPassword.length < 8 || strategyPassword !== strategyPasswordConfirm || !plan.equipped.length}><UploadCloud size={14} /> 현재 프리셋과 공략 등록</button></div>
+          </form>
           {boardMessage && <div className="board-message">{boardMessage}</div>}
           <div className="strategy-list">
             {boardLoading && !strategies.length ? <div className="strategy-empty">공략을 불러오는 중…</div> : strategies.length ? strategies.map((entry, index) => {
               const missing = entry.plan.equipped.filter((equippedSkill) => !skills.some((skill) => skill.id === equippedSkill.skillId)).length;
               const names = entry.plan.equipped.map((equippedSkill) => skills.find((skill) => skill.id === equippedSkill.skillId)?.name || `ID ${equippedSkill.skillId}`).slice(0, 8);
               const versionMismatch = entry.datasetVersion !== (meta.datasetVersion || meta.sourceHash.slice(0, 12));
-              return <article key={entry.id} className="strategy-card">
+              return <article key={entry.id} className="strategy-card" data-strategy-id={entry.id}>
                 <span className="strategy-rank">{index + 1}</span>
-                <div className="strategy-copy"><strong>{entry.title}</strong><span>{names.join(" · ") || "빈 조합"}</span><small className={versionMismatch ? "mismatch" : ""}>{entry.datasetVersion}{versionMismatch ? ` · 다른 버전${missing ? ` · 누락 ${missing}식` : ""}` : " · 현재 버전"}</small></div>
-                <button className="load-strategy" disabled={Boolean(missing)} onClick={() => { updatePlan(() => ({ ...entry.plan, maxSlots: Boolean(entry.plan.maxSlots) })); setBoardOpen(false); }}>불러오기</button>
+                <div className="strategy-copy"><strong>{entry.title}</strong><span>{names.join(" · ") || "빈 조합"}</span><small className={versionMismatch ? "mismatch" : ""}>{entry.datasetVersion}{versionMismatch ? ` · 다른 버전${missing ? ` · 누락 ${missing}식` : ""}` : " · 현재 버전"} · {entry.content ? "본문 있음" : "기존 글"}</small></div>
+                <div className="strategy-card-actions"><button className="view-strategy" onClick={() => openStrategyDetail(entry)}><Eye size={12} /> 본문 보기</button><button className="load-strategy" disabled={Boolean(missing)} onClick={() => { updatePlan(() => ({ ...entry.plan, maxSlots: Boolean(entry.plan.maxSlots) })); closeBoard(); }}>불러오기</button></div>
                 <button className="vote-button" onClick={() => void voteStrategy(entry.id)}><ThumbsUp size={14} /><b>{entry.votes}</b></button>
               </article>;
-            }) : <div className="strategy-empty"><BookOpenText size={28} /><strong>첫 공략을 등록해 보세요</strong><span>현재 프리셋과 데이터 버전이 함께 저장됩니다.</span></div>}
+            }) : <div className="strategy-empty"><BookOpenText size={28} /><strong>첫 공략을 등록해 보세요</strong><span>현재 프리셋, 공략 본문, 데이터 버전이 함께 저장됩니다.</span></div>}
           </div>
         </div>
       </div>}
+
+      {boardOpen && strategyDetail && <aside
+        ref={strategyDetailRef}
+        className={`strategy-detail-window ${strategyDetailCollapsed ? "collapsed" : ""}`}
+        style={strategyDetailPosition ? { left: strategyDetailPosition.x, top: strategyDetailPosition.y, right: "auto", bottom: "auto" } : undefined}
+        role="dialog"
+        aria-modal="false"
+        aria-labelledby="strategy-detail-title"
+        data-strategy-detail-id={strategyDetail.id}
+      >
+        <header className="strategy-detail-handle" onPointerDown={beginStrategyDetailDrag} onPointerMove={moveStrategyDetail} onPointerUp={endStrategyDetailDrag} onPointerCancel={endStrategyDetailDrag}>
+          <GripVertical size={15} aria-hidden="true" /><BookOpenText size={15} aria-hidden="true" />
+          <div><small>공략 본문 · 추천 {strategyDetail.votes}</small><strong id="strategy-detail-title">{strategyDetail.title}</strong></div>
+          <button type="button" aria-label={strategyDetailCollapsed ? "공략 본문 펼치기" : "공략 본문 접기"} aria-expanded={!strategyDetailCollapsed} aria-controls="strategy-detail-body" onClick={() => setStrategyDetailCollapsed((current) => !current)}>{strategyDetailCollapsed ? <ChevronUp size={15} /> : <ChevronDown size={15} />}</button>
+          <button type="button" aria-label="공략 본문 닫기" onClick={() => { setStrategyDetailId(null); setStrategyEditPassword(""); }}><X size={15} /></button>
+        </header>
+        {!strategyDetailCollapsed && <div className="strategy-detail-body" id="strategy-detail-body">
+          {boardMessage && <div className="strategy-detail-message">{boardMessage}</div>}
+          {strategyDetailMode === "view" && <>
+            <p className="strategy-detail-content" data-strategy-body>{strategyDetail.content || "비밀번호 기능과 본문 입력 기능이 추가되기 전에 등록된 공략입니다. 등록된 운공 조합은 그대로 확인할 수 있습니다."}</p>
+            <div className="strategy-detail-meta"><span>{strategyDetail.datasetVersion}</span><span>{strategyDetail.updatedAt && strategyDetail.updatedAt !== strategyDetail.createdAt ? "수정됨" : "최초 등록본"}</span></div>
+            <div className="strategy-detail-skills">{strategyDetail.plan.equipped.map((entry) => { const skill = skills.find((candidate) => candidate.id === entry.skillId); return <span key={`${entry.skillId}-${entry.mode}`} className={skill ? gradeClass(skill) : ""}>{skill?.name || `ID ${entry.skillId}`} <i>{entry.mode === "direct" ? "정" : "역"}</i></span>; })}</div>
+            <div className="strategy-detail-actions"><button onClick={() => { setStrategyDetailMode("edit"); setStrategyEditTitle(strategyDetail.title); setStrategyEditContent(strategyDetail.content || ""); setStrategyEditPassword(""); setBoardMessage(""); }}><Pencil size={13} /> 수정</button><button className="danger" onClick={() => { setStrategyDetailMode("delete"); setStrategyEditPassword(""); setBoardMessage(""); }}><Trash2 size={13} /> 삭제</button></div>
+          </>}
+          {strategyDetailMode === "edit" && <form className="strategy-detail-form" onSubmit={(event) => { event.preventDefault(); void saveStrategyEdit(); }}>
+            <label><span>공략 제목</span><input maxLength={32} value={strategyEditTitle} onChange={(event) => setStrategyEditTitle(event.target.value)} /></label>
+            <label><span>공략 본문</span><textarea minLength={10} maxLength={2000} value={strategyEditContent} onChange={(event) => setStrategyEditContent(event.target.value)} /><small>{strategyEditContent.trim().length}/2000</small></label>
+            <label><span>작성 비밀번호</span><input type="password" minLength={8} maxLength={72} autoComplete="current-password" value={strategyEditPassword} onChange={(event) => setStrategyEditPassword(event.target.value)} placeholder="등록할 때 사용한 비밀번호" /></label>
+            <small className="strategy-edit-note">제목과 본문만 수정되며 등록된 운공 조합과 추천 수는 유지됩니다.</small>
+            <div><button type="button" onClick={() => { setStrategyDetailMode("view"); setStrategyEditPassword(""); }}><X size={13} /> 취소</button><button type="submit" disabled={boardLoading || strategyEditTitle.trim().length < 2 || strategyEditContent.trim().length < 10 || strategyEditPassword.length < 8}><Save size={13} /> 비밀번호로 저장</button></div>
+          </form>}
+          {strategyDetailMode === "delete" && <form className="strategy-delete-form" onSubmit={(event) => { event.preventDefault(); void deleteStrategy(); }}>
+            <Trash2 size={25} /><strong>이 공략을 삭제할까요?</strong><p>공략 본문과 운공 조합, 받은 추천이 모두 삭제되며 되돌릴 수 없습니다.</p>
+            <label><span>작성 비밀번호</span><input type="password" minLength={8} maxLength={72} autoComplete="current-password" value={strategyEditPassword} onChange={(event) => setStrategyEditPassword(event.target.value)} placeholder="등록할 때 사용한 비밀번호" /></label>
+            <div><button type="button" onClick={() => { setStrategyDetailMode("view"); setStrategyEditPassword(""); }}><X size={13} /> 취소</button><button className="danger" type="submit" disabled={boardLoading || strategyEditPassword.length < 8}><Trash2 size={13} /> 영구 삭제</button></div>
+          </form>}
+        </div>}
+      </aside>}
 
       {reportBoardOpen && <div className="board-overlay" role="dialog" aria-modal="true" aria-label="시너지와 카운터 관계 제보 게시판">
         <div className="relation-board">

@@ -4,10 +4,14 @@ import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqli
 export const strategyBuilds = sqliteTable("strategy_builds", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   title: text("title").notNull(),
+  content: text("content").notNull().default(""),
   datasetVersion: text("dataset_version").notNull(),
   planJson: text("plan_json").notNull(),
   authorHash: text("author_hash").notNull(),
+  passwordHash: text("password_hash"),
+  passwordSalt: text("password_salt"),
   createdAt: integer("created_at").notNull().default(sql`(unixepoch())`),
+  updatedAt: integer("updated_at"),
 }, (table) => [
   index("strategy_builds_created_at_idx").on(table.createdAt),
   index("strategy_builds_author_hash_idx").on(table.authorHash),
