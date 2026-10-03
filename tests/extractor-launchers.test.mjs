@@ -80,6 +80,12 @@ test("portable release workflow builds native runtime bundles on both operating 
   assert.match(workflow, /--exclude-module fmod_toolkit/);
   assert.match(workflow, /dotnet-install/);
   assert.match(workflow, /ilspycmd --version 9\.1\.0\.7988/);
+  // Truncating native stdout can close the pipe early and fail a healthy
+  // executable (PowerShell's Select-Object / Bash's pipefail + head).
+  assert.doesNotMatch(workflow, /--help\s*\|/);
+  assert.match(workflow, /Bundled UI extractor smoke test failed/);
+  assert.match(packager, /code-composition\.mjs/);
+  assert.match(packager, /config-schema\.mjs/);
   assert.match(packager, /Portable runtime is incomplete/);
   assert.match(packager, /cpSync\(runtimeRoot/);
 });

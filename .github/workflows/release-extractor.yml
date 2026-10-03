@@ -54,7 +54,8 @@ jobs:
           $env:PATH = "$runtime\dotnet;$($env:PATH)"
           & "$runtime\node\node.exe" --version
           & "$runtime\ilspy\ilspycmd.exe" --version
-          & "$runtime\ui\taiwu-ui-extractor\taiwu-ui-extractor.exe" --help | Select-Object -First 1
+          & "$runtime\ui\taiwu-ui-extractor\taiwu-ui-extractor.exe" --help
+          if ($LASTEXITCODE -ne 0) { throw "Bundled UI extractor smoke test failed: $LASTEXITCODE" }
       - name: Prepare Linux portable runtimes
         if: matrix.platform == 'linux'
         shell: bash
@@ -75,7 +76,7 @@ jobs:
           export PATH="$runtime/dotnet:$PATH"
           "$runtime/node/node" --version
           "$runtime/ilspy/ilspycmd" --version
-          "$runtime/ui/taiwu-ui-extractor/taiwu-ui-extractor" --help | head -n 1
+          "$runtime/ui/taiwu-ui-extractor/taiwu-ui-extractor" --help
       - name: Package portable extractor
         run: node scripts/build-extractor-release.mjs "${{ inputs.version }}" --platform "${{ matrix.platform }}" --runtime .release-runtime
       - uses: actions/upload-artifact@v4
