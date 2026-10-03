@@ -21,7 +21,7 @@ await mkdir(output, { recursive: true });
 await cp(client, output, { recursive: true });
 const serverModule = await import(`${pathToFileURL(resolve(server, "index.js")).href}?pages=${Date.now()}`);
 const rendered = await serverModule.default.fetch(
-  new Request("https://taiwu-mugongjin.pages.dev/", { headers: { accept: "text/html" } }),
+  new Request("https://taiwu-mugongjin.pages.dev/", { headers: { accept: "text/html", host: "taiwu-mugongjin.pages.dev", "x-forwarded-proto": "https" } }),
   { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } },
   { waitUntil() {}, passThroughOnException() {} },
 );

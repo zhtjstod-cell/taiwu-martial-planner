@@ -1,19 +1,31 @@
 export type PublicPlan = {
-  equipped: { skillId: number; mode: "direct" | "reverse"; mastered: boolean }[];
+  schemaVersion: number;
+  equipped: { skillId: number; mode: "direct" | "reverse"; mastered: boolean; legendaryBookReduced: boolean }[];
   genericAllocation: number[];
   maxSlots: boolean;
 };
+
+export const STRATEGY_PLAN_SCHEMA_VERSION = 2;
 
 export function validatePlan(value: unknown): PublicPlan {
   const plan = value as Partial<PublicPlan>;
   if (!plan || typeof plan !== "object" || !Array.isArray(plan.equipped) || plan.equipped.length > 30) throw new Error("운공 조합 형식이 올바르지 않습니다.");
   const equipped = plan.equipped.map((entry) => {
     if (!Number.isInteger(entry?.skillId) || entry.skillId < 0 || entry.skillId > 100000 || !["direct", "reverse"].includes(entry.mode)) throw new Error("운공 조합의 무공 정보가 올바르지 않습니다.");
-    return { skillId: entry.skillId, mode: entry.mode, mastered: Boolean(entry.mastered) };
+    const legendaryBookReduced = Boolean(entry.legendaryBookReduced);
+    return { skillId: entry.skillId, mode: entry.mode, mastered: Boolean(entry.mastered) && !legendaryBookReduced, legendaryBookReduced };
   });
-  const genericAllocation = Array.isArray(plan.genericAllocation) ? plan.genericAllocation.slice(0, 4).map((value) => Math.max(0, Math.min(9, Number(value) || 0))) : [0, 0, 0, 0];
+  const genericAllocation = Array.isArray(plan.genericAllocation) ? plan.genericAllocation.slice(0, 4).map((value) => Math.max(0, Math.min(12, Number(value) || 0))) : [0, 0, 0, 0];
   while (genericAllocation.length < 4) genericAllocation.push(0);
-  return { equipped, genericAllocation, maxSlots: Boolean(plan.maxSlots) };
+  return { schemaVersion: STRATEGY_PLAN_SCHEMA_VERSION, equipped, genericAllocation, maxSlots: Boolean(plan.maxSlots) };
+}
+
+export function readStoredPlan(value: unknown) {
+  const sourceSchemaVersion = Number((value as { schemaVersion?: unknown } | null)?.schemaVersion);
+  return {
+    plan: validatePlan(value),
+    planMigrated: !Number.isInteger(sourceSchemaVersion) || sourceSchemaVersion < STRATEGY_PLAN_SCHEMA_VERSION,
+  };
 }
 
 export function validateTitle(value: unknown) {

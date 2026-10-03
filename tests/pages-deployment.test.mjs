@@ -125,6 +125,9 @@ test("strategy passwords are hashed and gate body editing and deletion", async (
   const insert = calls.find((call) => /INSERT INTO strategy_builds/.test(call.sql));
   assert.equal(insert.values.length, 8);
   assert.ok(!insert.values.includes(password));
+  const storedPlan = JSON.parse(insert.values[3]);
+  assert.equal(storedPlan.schemaVersion, 2);
+  assert.equal(storedPlan.equipped[0].legendaryBookReduced, false);
   assert.match(passwordHash, /^pbkdf2-sha256\$100000\$[0-9a-f]{64}$/);
   assert.match(passwordSalt, /^[0-9a-f]{32}$/);
 
@@ -139,6 +142,9 @@ test("strategy passwords are hashed and gate body editing and deletion", async (
   const listed = await worker.fetch(new Request("https://example.test/api/strategies"), env);
   const listedBody = await listed.json();
   assert.equal(listedBody.strategies[0].content, "독을 먼저 누적한 뒤 발작시키는 운용법입니다.");
+  assert.equal(listedBody.strategies[0].planMigrated, true);
+  assert.equal(listedBody.strategies[0].plan.schemaVersion, 2);
+  assert.equal(listedBody.strategies[0].plan.equipped[0].legendaryBookReduced, false);
   assert.doesNotMatch(JSON.stringify(listedBody), /password|pbkdf2|correct-password/i);
 
   const deleted = await worker.fetch(new Request("https://example.test/api/strategies/41", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ password }) }), env);

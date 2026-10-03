@@ -3,7 +3,7 @@ import test from "node:test";
 import { createBuildFile, readBuildFile } from "../app/build-transfer.mjs";
 
 const plan = {
-  equipped: [{ skillId: 287, mode: "direct", mastered: false }, { skillId: 580, mode: "reverse", mastered: true }],
+  equipped: [{ skillId: 287, mode: "direct", mastered: false, legendaryBookReduced: true }, { skillId: 580, mode: "reverse", mastered: true, legendaryBookReduced: false }],
   genericAllocation: [1, 0, 2, 0],
   maxSlots: false,
 };
@@ -24,4 +24,16 @@ test("build imports reject unknown, duplicate, and malformed martial arts", () =
   exported.plan.equipped[1].skillId = 580;
   exported.plan.equipped[1].mode = "invalid";
   assert.throws(() => readBuildFile(exported, new Set([287, 580])), /잘못된 공법 배치/);
+});
+
+test("legacy build files migrate and modifier conflicts are rejected", () => {
+  const legacy = createBuildFile({ plan, datasetVersion: "1", sourceHash: "abc" });
+  legacy.schemaVersion = 1;
+  for (const entry of legacy.plan.equipped) delete entry.legendaryBookReduced;
+  const imported = readBuildFile(legacy, new Set([287, 580]));
+  assert.ok(imported.plan.equipped.every((entry) => entry.legendaryBookReduced === false));
+
+  const conflicted = createBuildFile({ plan, datasetVersion: "1", sourceHash: "abc" });
+  conflicted.plan.equipped[0].mastered = true;
+  assert.throws(() => readBuildFile(conflicted, new Set([287, 580])), /정해와 기서 수납/);
 });

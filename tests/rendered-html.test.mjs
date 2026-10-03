@@ -27,9 +27,13 @@ test("server-renders the Taiwu planner", async () => {
   assert.match(html, /데이터 업로드/);
   assert.match(html, /공략 게시판/);
   assert.match(html, /관계 제보/);
+  assert.match(html, /DLC 전투/);
+  assert.match(html.replace(/<!--.*?-->/g, ""), /한국어 추출 955식/);
   assert.match(html, /품 분류/);
   assert.match(html, /고품 → 저품/);
   assert.match(html, /조건 없이 간단하게 최대 운공칸에 도달할 수 있습니다/);
+  assert.match(html, /계통별 플래너 상한 12칸/);
+  assert.match(html, /기서 수납/);
   assert.match(html, /현재 프리셋 내보내기/);
   assert.match(html, /운공안 파일 가져오기/);
   assert.equal((html.match(/data-plan-index=/g) || []).length, 6);

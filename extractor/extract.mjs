@@ -6,6 +6,8 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSy
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { extractCodeLogic } from "./code-ir.mjs";
+import { constructorFields, bindConfigArguments } from "./config-schema.mjs";
+import { assembleEffectCode } from "./code-composition.mjs";
 
 const argv = process.argv.slice(2);
 const valueOf = (name, fallback) => {
@@ -65,6 +67,18 @@ function decompileClientType(typeName) {
     writeFileSync(destination, readFileSync(temporary));
   }
   return readFileSync(destination, "utf8");
+}
+
+function decompileFirstClientType(typeNames) {
+  const errors = [];
+  for (const typeName of typeNames) {
+    try {
+      return decompileClientType(typeName);
+    } catch (error) {
+      errors.push(`${typeName}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  throw new Error(`클라이언트 UI 형식을 역컴파일하지 못했습니다.\n${errors.join("\n")}`);
 }
 
 function decompileCode() {
@@ -193,13 +207,19 @@ function splitArguments(call) {
 }
 
 const combatSource = decompileType("Config.CombatSkill");
+const combatFields = constructorFields(decompileType("Config.CombatSkillItem"), "CombatSkillItem");
 const effectSource = decompileType("Config.SpecialEffect");
 const weaponSource = decompileType("Config.Weapon");
 const trickSource = decompileType("Config.TrickType");
 const dataFieldSource = decompileType("Config.SpecialEffectDataField");
+const combatSkillTypeSource = decompileType("Config.CombatSkillType");
+const legendaryBookSlotSource = decompileType("Config.LegendaryBookSlot");
 const combatSkillHelperSource = decompileType("GameData.Domains.Character.CombatSkillHelper");
 const globalConfigSource = decompileType("GlobalConfig");
-const equipUiSource = decompileClientType("UI_CharacterMenuEquipCombatSkill");
+const equipUiSource = decompileFirstClientType([
+  "Game.Views.CharacterMenu.ViewCharacterMenuEquipCombatSkill",
+  "UI_CharacterMenuEquipCombatSkill",
+]);
 const codeRoot = withCode ? decompileCode() : null;
 const combatKo = mergePairs(join(languageKo, "CombatSkill_language.txt"), overlayFiles("CombatSkill_language.txt"));
 const combatCn = readPairs(join(languageCn, "CombatSkill_language.txt"));
@@ -212,9 +232,14 @@ const trickCn = readPairs(join(languageCn, "TrickType_language.txt"));
 const dataFieldKo = mergePairs(join(languageKo, "SpecialEffectDataField_language.txt"), overlayFiles("SpecialEffectDataField_language.txt"));
 const dataFieldCn = readPairs(join(languageCn, "SpecialEffectDataField_language.txt"));
 const combatSkillTypeKo = mergePairs(join(languageKo, "CombatSkillType_language.txt"), overlayFiles("CombatSkillType_language.txt"));
+const legendaryBookSlotKo = mergePairs(join(languageKo, "LegendaryBookSlot_language.txt"), overlayFiles("LegendaryBookSlot_language.txt"));
+const legendaryBookSlotCn = readPairs(join(languageCn, "LegendaryBookSlot_language.txt"));
 const organizationKo = mergePairs(join(languageKo, "Organization_language.txt"), overlayFiles("Organization_language.txt"));
 const organizationCn = readPairs(join(languageCn, "Organization_language.txt"));
 const uiKo = mergePairs(join(languageKo, "ui_language.txt"), overlayFiles("ui_language.txt"));
+const dlcKo = mergePairs(join(languageKo, "ImplementedDlc_language.txt"), overlayFiles("ImplementedDlc_language.txt"));
+const stateKo = mergePairs(join(languageKo, "CombatState_language.txt"), overlayFiles("CombatState_language.txt"));
+const cleanText = (value = "") => value.replace(/<[^>]+>/g, "").replace(/\\n/g, "\n");
 
 const effectRows = new Map();
 for (const call of extractCalls(effectSource, "SpecialEffectItem")) {
@@ -258,7 +283,35 @@ const uiProfile = {
   },
   equipTypeLogos: numbersInList(equipUiSource.match(/_equipTypeLogos\s*=([^;]+)/)?.[1] || "").slice(-5),
   supportsGenericGridAllocation: /AllocateGenericGrid/.test(equipUiSource),
-  supportsMultiplePlans: /_currEquipPlan|PlanHolder/.test(equipUiSource),
+  supportsMultiplePlans: /_currEquipPlan|PlanHolder|PlanCount/.test(equipUiSource),
+};
+
+const legendaryBookSlotRows = extractCalls(legendaryBookSlotSource, "LegendaryBookSlotItem").map((call) => {
+  const args = splitArguments(call);
+  const id = readInteger(args[0], -1);
+  return {
+    id,
+    name: legendaryBookSlotKo.get(`Name_${id}`) || legendaryBookSlotCn.get(`Name_${id}`) || `기서 슬롯 ${id}`,
+    description: legendaryBookSlotKo.get(`Desc_${id}`) || legendaryBookSlotCn.get(`Desc_${id}`) || "",
+    className: unquote(args[3] || ""),
+  };
+}).filter((slot) => slot.id >= 0);
+const legendaryBookSlotById = new Map(legendaryBookSlotRows.map((slot) => [slot.id, slot]));
+const legendaryBookGridCostSlots = extractCalls(combatSkillTypeSource, "CombatSkillTypeItem").flatMap((call) => {
+  const args = splitArguments(call);
+  const skillType = readInteger(args[0], -1);
+  const slot = numbersInList(args[11] || "").map((id) => legendaryBookSlotById.get(id)).find((candidate) => candidate?.className.endsWith(".ShouZhi"));
+  return skillType >= 0 && slot ? [{ skillType, skillTypeName: combatSkillTypeKo.get(`Name_${skillType}`) || `무학 ${skillType}`, ...slot }] : [];
+});
+const legendaryBookGridCostDescription = legendaryBookGridCostSlots[0]?.description || "";
+const legendaryBook = {
+  gridCostRule: {
+    targetCost: readInteger(legendaryBookGridCostDescription.match(/(\d+)\s*칸/)?.[1] || "1", 1),
+    requirementPercent: readInteger(legendaryBookGridCostDescription.match(/(\d+)\s*%/)?.[1] || "50", 50),
+    perSkillTypeLimit: 1,
+    supportedSkillTypes: legendaryBookGridCostSlots.map((slot) => slot.skillType),
+    slots: legendaryBookGridCostSlots.map(({ skillType, skillTypeName, id, name, description, className }) => ({ skillType, skillTypeName, id, name, description: description.replace(/<[^>]+>/g, ""), className })),
+  },
 };
 
 const tricks = extractCalls(trickSource, "TrickTypeItem").map((call) => {
@@ -381,21 +434,7 @@ function codeFor(className) {
   const path = join(codeRoot, "GameData", "Domains", "SpecialEffect", ...className.split(".")) + ".cs";
   if (!existsSync(path)) return "";
   const index = indexCodeClasses();
-  const chain = [];
-  const visited = new Set();
-  let current = { source: readFileSync(path, "utf8"), baseName: null, path };
-  for (let depth = 0; current && depth < 16; depth += 1) {
-    const declaration = current.source.match(/\bclass\s+([A-Za-z_][A-Za-z0-9_]*)(?:<[^>{}]+>)?\s*(?::\s*([A-Za-z_][A-Za-z0-9_.]*(?:<[^>{}]+>)?))?/);
-    const currentName = declaration?.[1] || basename(current.path, ".cs");
-    const baseName = declaration?.[2]?.replace(/<.*$/, "").split(".").at(-1) || current.baseName;
-    if (visited.has(currentName)) break;
-    visited.add(currentName);
-    chain.push(`// inheritance:${depth}:${currentName}\n${current.source}`);
-    if (!baseName || ["Object", "SpecialEffectBase", "CombatSkillSpecialEffectBase"].includes(baseName)) break;
-    const candidates = index.get(baseName) || [];
-    current = candidates.find((candidate) => /Common/.test(candidate.path)) || candidates[0] || null;
-  }
-  const result = chain.join("\n\n");
+  const result = assembleEffectCode({ source: readFileSync(path, "utf8"), path }, index);
   codeClosureCache.set(className, result);
   return result;
 }
@@ -447,6 +486,7 @@ const conceptRules = [
   ["경령 진기", /轻灵真气|경령 진기/i],
   ["호체 진기", /护体真气|호체 진기/i],
   ["기교 진기", /奇窍.*真气|기규.*진기|기교.*진기/i],
+  ["무 식", /「(?:无|無|무)」\s*(?:式|식)|(?:无|無)式/i],
   ["식", /蓄式|「[^」]{1,2}」式|축식|「[^」]{1,2}」 식/i],
   ["살식", /「杀」式|杀式|살식/i],
   ["공격 거리", /攻击范围|敌我距离|공격 범위|적과.*거리/i],
@@ -477,7 +517,7 @@ const conceptRules = [
   ["내공", /内功|내공/i],
   ["강화 상태", /增益状态|增益|강화 상태|버프/i],
   ["약화 상태", /减益状态|损害状态|약화 상태|디버프/i],
-  ["봉금", /封禁|封印|봉금|봉인/i],
+  ["봉금", /封禁|封印|봉금|봉인|봉쇄/i],
   ["행동", /行动|행동/i],
   ["기억", /记忆|기억/i],
   ["오행", /五行|오행/i],
@@ -523,11 +563,12 @@ const actionRules = {
   amplifies: /提高|增加|提升|强化|恶化|延长|加快|증가|향상|강화|악화|연장|가속/i,
   reduces: /降低|减少|减弱|缩短|恢复|치유|감소|저하|약화|단축|회복/i,
   prevents: /禁止|无法|免受|免于|无效|无视|抵消|不可(?!避免)|不会|금지|불가(?!피)|면역|무효|무시|방지/i,
-  requires: /当|每当|如果|若|根据|每有|需要|때|경우|마다|보유|필요/i,
+  requires: /当|每当|如果|若|根据|每有|需要|때|경우|마다|보유|필요|(?:개|점|중첩)당/i,
 };
 
 function matchedConcepts(text) {
-  return conceptRules.filter(([, pattern]) => pattern.test(text)).map(([label]) => label);
+  const concepts = conceptRules.filter(([, pattern]) => pattern.test(text)).map(([label]) => label);
+  return concepts.includes("무 식") ? concepts.filter((concept) => concept !== "식") : concepts;
 }
 
 function normalizeMechanicAxis(value) {
@@ -539,7 +580,7 @@ function normalizeMechanicAxis(value) {
 
 const harmfulResources = new Set([
   "직접 피해", "피해", "외상", "내상", "중상", "부상", "오래된 부상", "파열", "봉혈", "실신",
-  "필사 표식", "패배 표식", "독", "독 등급", "고독", "내식 문란", "약화 상태", "봉금", "무기 내구도",
+  "필사 표식", "패배 표식", "독", "독 등급", "고독", "내식 문란", "약화 상태", "봉금", "무 식", "무기 내구도",
 ]);
 const beneficialResources = new Set([
   "자세", "호흡", "기세", "각력", "신법", "진기", "내공 진기", "파괴 진기", "경령 진기", "호체 진기", "기교 진기",
@@ -548,8 +589,10 @@ const beneficialResources = new Set([
 ]);
 
 function semanticTargetFor(text) {
-  const self = /운용자|사용자|자신|본인|스스로|己方|自身|自己|运用者|使用者/i.test(text);
-  const enemy = /(?:^|[^가-힣])적(?:의|에게|이|을|과|은|이)?|상대|敌人|敌方|对手/i.test(text);
+  if (/양측|쌍방|双方|两者|兩者/i.test(text)) return "양측";
+  const self = /운용자|사용자|자신|본인|스스로|천제|백룡|흑룡|청룡|적룡|황룡|己方|自身|自己|运用者|使用者/i.test(text);
+  // Bare 적 must end at a word boundary; 적용/적성 are not enemy actors.
+  const enemy = /(?:^|[^가-힣])적(?:에게서|에게|으로부터|의|이|을|과|은|에|도|(?=$|[^가-힣]))|상대|敌人|敌方|对手/i.test(text);
   if (self && enemy) return "양측";
   if (enemy) return "적";
   if (self) return "자신";
@@ -583,11 +626,29 @@ function buildSemanticEdges(clauses, logic) {
     if (!resources.length) continue;
     const target = semanticTargetFor(clause);
     const verbs = [];
+    // A condition belongs to the text BEFORE its boundary, not every resource
+    // mentioned in the resulting effect. "범위 안에 있으면 실신 피해" does
+    // not require pre-existing stun, and "자신이 실신되면 적에게 실신" does
+    // not require the enemy to be stunned. Skip leading event-only boundaries.
+    const conditions = [];
+    let conditionStart = 0;
+    for (const marker of clause.matchAll(/때(?:마다)?|경우|[가-힣]+(?:으면|되면|하면|라면|다면|이면)|(?:개|점|중첩|하나)\s*당|마다/g)) {
+      const prefix = clause.slice(conditionStart, marker.index + marker[0].length);
+      const conditionResources = matchedConcepts(prefix);
+      if (conditionResources.length) conditions.push({ resources: conditionResources, target: semanticTargetFor(prefix) });
+      conditionStart = marker.index + marker[0].length;
+    }
+    const perUnitMarker = clause.match(/(?:개|점|중첩|하나)\s*당|마다|每有|每当/);
+    const perUnitConditionResources = perUnitMarker
+      ? matchedConcepts(clause.slice(0, (perUnitMarker.index || 0) + perUnitMarker[0].length))
+      : [];
     const convertsToOldInjury = resources.includes("오래된 부상")
       && /转(?:化)?为|变为|전환|구상처로\s*변|오래된\s*부상(?:으)?로\s*변/i.test(clause);
+    const referencesExistingBan = /(?:봉금|봉인)(?:된|되어|중인|당한)|被(?:封禁|封印)|已有(?:封禁|封印)/i.test(clause);
     const createsEnemyBan = target === "적"
       && resources.includes("봉금")
       && /封禁|封印|봉금|봉인/i.test(clause)
+      && !referencesExistingBan
       && !/(?:봉금|封禁).{0,14}(?:시간|时间).{0,12}(?:증가|연장|늘어|提高|增加|延长)/i.test(clause);
     if (convertsToOldInjury || createsEnemyBan) verbs.push("produces");
     else if (actionRules.prevents.test(clause)) verbs.push("prevents");
@@ -596,9 +657,19 @@ function buildSemanticEdges(clauses, logic) {
     else if (actionRules.reduces.test(clause)) verbs.push("reduces");
     else if (actionRules.produces.test(clause)) verbs.push("produces");
     else if (actionRules.amplifies.test(clause)) verbs.push("amplifies");
-    if (actionRules.requires.test(clause)) verbs.push("requires");
+    for (const condition of conditions) {
+      for (const resource of condition.resources) edges.push({
+        verb: "requires", resource, target: condition.target, valence: resourceValence(resource),
+        source: "tooltip", confidence: condition.target === "미상" ? 1 : 2,
+        evidence: clause.replace(/<[^>]+>/g, "").trim().slice(0, 220),
+      });
+    }
     for (const verb of [...new Set(verbs)]) {
       for (const resource of resources) {
+        // In "표식 1개당 확률 증가" the resource is a condition, not an
+        // effect produced by the probability increase itself.
+        if (["produces", "amplifies"].includes(verb) && perUnitConditionResources.includes(resource)) continue;
+        if (verb === "requires" && perUnitConditionResources.length && !perUnitConditionResources.includes(resource)) continue;
         edges.push({
           verb,
           resource,
@@ -618,8 +689,8 @@ function buildSemanticEdges(clauses, logic) {
 }
 
 function analyzeBanControl(textKo, textCn, semanticEdges) {
-  const text = `${textKo}\n${textCn}`;
-  const sentences = text.split(/[。.!！?？;；\n]+/).map((sentence) => sentence.trim()).filter(Boolean);
+  const text = `${textKo}\n${textCn}`.replace(/봉쇄/g, "봉금");
+  const sentences = text.split(/[。!！?？;；\n]+|(?<!\d)\.(?!\d)/).map((sentence) => sentence.trim()).filter(Boolean);
   const deniedElements = new Set();
   const weakenedElements = new Set();
 
@@ -636,12 +707,16 @@ function analyzeBanControl(textKo, textCn, semanticEdges) {
   }
 
   const creates = semanticEdges.some((edge) => edge.resource === "봉금" && edge.target === "적" && ["produces", "amplifies"].includes(edge.verb))
-    || sentences.some((sentence) => semanticTargetFor(sentence) === "적" && /(?:봉금|봉인|封禁|封印)/i.test(sentence) && !/(?:시간|时间).{0,12}(?:증가|연장|늘어|提高|增加|延长)/i.test(sentence));
+    || sentences.some((sentence) => semanticTargetFor(sentence) === "적"
+      && /(?:봉금|봉인|封禁|封印)/i.test(sentence)
+      && !/(?:봉금|봉인)(?:된|되어|중인|당한)|被(?:封禁|封印)|已有(?:封禁|封印)/i.test(sentence)
+      && !/(?:시간|时间).{0,12}(?:증가|연장|늘어|提高|增加|延长)/i.test(sentence));
   const amplifies = /(?:봉금|봉인|封禁|封印).{0,18}(?:시간|时间).{0,18}(?:증가|연장|늘어|두\s*배|提高|增加|延长|翻倍)/i.test(text);
   const exploits = /(?:봉금|봉인|封禁|封印).{0,24}(?:회복|해제|종료|恢复|解除|结束).{0,40}(?:피해|반서|伤害|反噬)/i.test(text);
   const clears = semanticEdges.some((edge) => edge.resource === "봉금" && ["자신", "전투 상태"].includes(edge.target) && edge.verb === "clears")
     || /(?:봉금|봉인|封禁|封印).{0,22}(?:즉시\s*)?(?:종료|제거|해제|정화|结束|消除|解除|清除)/i.test(text);
   const resists = /(?:모든\s*)?공법.{0,18}(?:봉금|봉인).{0,18}(?:어렵|면역|무효)|(?:봉금|봉인).{0,18}(?:할\s*수\s*없|되지\s*않|면역)|功法.{0,18}(?:封禁|封印).{0,18}(?:困难|免疫|无效)|(?:无法|不可).{0,10}(?:封禁|封印)/i.test(text);
+  const immune = /(?:이|해당)\s*(?:천부|공법).{0,20}(?:봉금|봉인).{0,16}(?:할\s*수\s*없|되지\s*않)|(?:此|该|該).{0,12}(?:无法|不可|不能).{0,8}(?:封禁|封印)/i.test(text);
 
   return {
     creates,
@@ -649,17 +724,22 @@ function analyzeBanControl(textKo, textCn, semanticEdges) {
     exploits,
     clears,
     resists,
+    immune,
     deniedElements: [...deniedElements],
     weakenedElements: [...weakenedElements],
   };
 }
 
 function analyzeEffect(textKo, textCn, code, mode, shortKo = [], shortCn = []) {
-  const text = `${textCn} ${textKo}`;
+  // The Korean overlay can correct mechanically wrong source tooltips.  Once a
+  // localized description exists, do not merge the stale source prose back
+  // into semantic concepts and relationships.  Chinese labels are still kept
+  // below for exact sect/weapon axis matching.
+  const text = (textKo.trim() || textCn).replace(/봉쇄/g, "봉금");
   const concepts = matchedConcepts(text);
   const triggers = triggerRules.filter(([, pattern]) => pattern.test(text)).map(([label]) => label);
   const buckets = { produces: [], consumes: [], clears: [], amplifies: [], reduces: [], prevents: [], requires: [] };
-  const clauses = text.split(/[；;。.!！?？，,\n]/).filter(Boolean);
+  const clauses = text.split(/[；;。!！?？，,\n]|(?<!\d)\.(?!\d)|하고\s*(?=(?:운용자|자신|천제|백룡|흑룡|청룡|적룡|황룡)(?:의|은|이))/).filter(Boolean);
   for (const clause of clauses) {
     const clauseConcepts = matchedConcepts(clause);
     for (const [bucket, pattern] of Object.entries(actionRules)) {
@@ -669,7 +749,8 @@ function analyzeEffect(textKo, textCn, code, mode, shortKo = [], shortCn = []) {
   const unique = (values) => [...new Set(values)];
   const logic = extractCodeLogic(code, mode);
   const semanticEdges = buildSemanticEdges(clauses, logic);
-  const banControl = analyzeBanControl(textKo, textCn, semanticEdges);
+  const banControl = analyzeBanControl(text, "", semanticEdges);
+  if (banControl.immune && /AnimalConfig\s*==\s*null/.test(code)) banControl.immunityCondition = "짐승 형태(AnimalConfig가 있는 경우)에만 봉금 면역 코드 적용";
   const codeEvents = logic.events.map((event) => event.name);
   const codeEventLabels = unique(logic.events.map((event) => event.label));
   const codeSignals = logic.symbols;
@@ -741,39 +822,46 @@ const skills = [];
 for (const call of extractCalls(combatSource, "CombatSkillItem")) {
   const args = splitArguments(call);
   if (args.length < 20) continue;
-  const id = readInteger(args[0], -1);
+  const fields = bindConfigArguments(combatFields, args, "CombatSkillItem");
+  const id = readInteger(fields.templateId, -1);
   if (id < 0) continue;
-  const directId = readInteger(args[16], -1);
-  const reverseId = readInteger(args[17], -1);
+  const directId = readInteger(fields.directEffectID, -1);
+  const reverseId = readInteger(fields.reverseEffectID, -1);
   const directRow = effectRows.get(directId);
   const reverseRow = effectRows.get(reverseId);
   const className = directRow?.className || reverseRow?.className || null;
   const code = codeFor(className);
-  const directDesc = valuesFor(effectKo, "DetailedDesc", directId).join(" ") || valuesFor(effectKo, "Desc", directId).join(" ");
-  const reverseDesc = valuesFor(effectKo, "DetailedDesc", reverseId).join(" ") || valuesFor(effectKo, "Desc", reverseId).join(" ");
-  const directCn = valuesFor(effectCn, "DetailedDesc", directId).join(" ") || valuesFor(effectCn, "Desc", directId).join(" ");
-  const reverseCn = valuesFor(effectCn, "DetailedDesc", reverseId).join(" ") || valuesFor(effectCn, "Desc", reverseId).join(" ");
-  const sharedText = [directDesc, reverseDesc, directCn, reverseCn, valuesFor(effectKo, "ShortDesc", directId).join(" "), valuesFor(effectKo, "ShortDesc", reverseId).join(" ")].join(" ");
+  const directSummary = valuesFor(effectKo, "Desc", directId).join(" ");
+  const reverseSummary = valuesFor(effectKo, "Desc", reverseId).join(" ");
+  const directSummaryCn = valuesFor(effectCn, "Desc", directId).join(" ");
+  const reverseSummaryCn = valuesFor(effectCn, "Desc", reverseId).join(" ");
+  const directDesc = valuesFor(effectKo, "DetailedDesc", directId).join(" ") || directSummary;
+  const reverseDesc = valuesFor(effectKo, "DetailedDesc", reverseId).join(" ") || reverseSummary;
+  const directCn = valuesFor(effectCn, "DetailedDesc", directId).join(" ") || directSummaryCn;
+  const reverseCn = valuesFor(effectCn, "DetailedDesc", reverseId).join(" ") || reverseSummaryCn;
+  const sharedText = [directSummary || directSummaryCn, directDesc || directCn, reverseSummary || reverseSummaryCn, reverseDesc || reverseCn, valuesFor(effectKo, "ShortDesc", directId).join(" "), valuesFor(effectKo, "ShortDesc", reverseId).join(" ")].join(" ");
   const directShortCn = valuesFor(effectCn, "ShortDesc", directId).join("\n");
   const reverseShortCn = valuesFor(effectCn, "ShortDesc", reverseId).join("\n");
   const directShortKo = valuesFor(effectKo, "ShortDesc", directId);
   const reverseShortKo = valuesFor(effectKo, "ShortDesc", reverseId);
   const directShortValuesCn = valuesFor(effectCn, "ShortDesc", directId);
   const reverseShortValuesCn = valuesFor(effectCn, "ShortDesc", reverseId);
-  const directAnalysis = analyzeEffect(`${directShortKo.join("\n")}\n${directDesc}`, `${directShortCn}\n${directCn}`, code, "direct", directShortKo, directShortValuesCn);
-  const reverseAnalysis = analyzeEffect(`${reverseShortKo.join("\n")}\n${reverseDesc}`, `${reverseShortCn}\n${reverseCn}`, code, "reverse", reverseShortKo, reverseShortValuesCn);
-  const equipType = readInteger(args[5], -1);
-  const type = readInteger(args[6], -1);
-  const sect = readInteger(args[9], -1);
-  const element = readInteger(args[10], -1);
-  const distanceAddition = readInteger(args[68], 0);
-  const trickCost = resolveNeedTricks(args[69], id);
-  const recommendedWeaponId = readInteger(args[72], -1);
-  const fixedWeaponId = readInteger(args[73], -1);
+  const directAnalysis = analyzeEffect(`${directShortKo.join("\n")}\n${directSummary}\n${directDesc}`, `${directShortCn}\n${directSummaryCn}\n${directCn}`, code, "direct", directShortKo, directShortValuesCn);
+  const reverseAnalysis = analyzeEffect(`${reverseShortKo.join("\n")}\n${reverseSummary}\n${reverseDesc}`, `${reverseShortCn}\n${reverseSummaryCn}\n${reverseCn}`, code, "reverse", reverseShortKo, reverseShortValuesCn);
+  const equipType = readInteger(fields.equipType, -1);
+  const type = readInteger(fields.type, -1);
+  const sect = readInteger(fields.sectId, -1);
+  const element = readInteger(fields.fiveElements, -1);
+  const distanceAddition = readInteger(fields.distanceAdditionWhenCast, 0);
+  const trickCost = resolveNeedTricks(fields.trickCost, id);
+  const recommendedWeaponId = readInteger(fields.mostFittingWeaponID, -1);
+  const fixedWeaponId = readInteger(fields.fixedBestWeaponID, -1);
   const recommendedWeapon = weaponById.get(recommendedWeaponId) || null;
   const fixedWeapon = weaponById.get(fixedWeaponId) || null;
   const weaponGroupId = fixedWeapon?.groupId ?? recommendedWeapon?.groupId ?? recommendedWeaponId;
-  const weaponCandidates = weapons.filter((weapon) => fixedWeaponId >= 0 ? weapon.id === fixedWeaponId : weapon.groupId === weaponGroupId);
+  const weaponCandidates = fixedWeapon ? [fixedWeapon] : recommendedWeapon
+    ? recommendedWeapon.groupId >= 0 ? weapons.filter((weapon) => weapon.groupId === weaponGroupId) : [recommendedWeapon]
+    : [];
   const compatibleWeaponMap = new Map();
   if (trickCost.length > 0) {
     for (const weapon of weapons) {
@@ -791,30 +879,31 @@ for (const call of extractCalls(combatSource, "CombatSkillItem")) {
   }
   const rangeMin = weaponCandidates.length ? Math.min(...weaponCandidates.map((weapon) => weapon.minDistance)) : null;
   const rangeMax = weaponCandidates.length ? Math.max(...weaponCandidates.map((weapon) => weapon.maxDistance + distanceAddition)) : null;
-  const requiredBodyParts = resolveNumberArray(args[62], id, "List<sbyte>");
-  const specificGrids = resolveNumberArray(args[32], id, "sbyte[]").slice(0, 4);
-  const injuryPartDistribution = resolveNumberArray(args[74], id, "sbyte[]");
-  const hitPowerDistribution = resolveNumberArray(args[76], id, "sbyte[]");
-  const outerDamageSteps = resolveNumberArray(args[114], id, "int[]");
-  const innerDamageSteps = resolveNumberArray(args[115], id, "int[]");
-  const propertyBonuses = resolvePropertyValues(args[113], id);
-  const poisons = resolvePoisons(args[79], id);
+  const requiredBodyParts = resolveNumberArray(fields.needBodyPartTypes, id, "List<sbyte>");
+  const specificGrids = resolveNumberArray(fields.specificGrids, id, "sbyte[]").slice(0, 4);
+  const injuryPartDistribution = resolveNumberArray(fields.injuryPartAtkRateDistribution, id, "sbyte[]");
+  const hitPowerDistribution = resolveNumberArray(fields.perHitDamageRateDistribution, id, "sbyte[]");
+  const outerDamageSteps = resolveNumberArray(fields.outerDamageSteps, id, "int[]");
+  const innerDamageSteps = resolveNumberArray(fields.innerDamageSteps, id, "int[]");
+  const propertyBonuses = resolvePropertyValues(fields.propertyAddList, id);
+  const poisons = resolvePoisons(fields.poisons, id);
+  const effectiveCode = (analysis) => analysis.logic.operations.map((operation) => operation.evidence).join("\n");
   skills.push({
     id,
     name: combatKo.get(`Name_${id}`) || combatCn.get(`Name_${id}`) || `무공 ${id}`,
     nameCn: combatCn.get(`Name_${id}`) || "",
     lore: combatKo.get(`Desc_${id}`) || "",
-    gradeIndex: readInteger(args[2], 0),
-    grade: 9 - readInteger(args[2], 0),
-    icon: unquote(args[4]),
+    gradeIndex: readInteger(fields.grade, 0),
+    grade: 9 - readInteger(fields.grade, 0),
+    icon: unquote(fields.icon),
     equipType,
     equipName: equipNames[equipType] || "기타",
     type,
     typeName: combatSkillTypeKo.get(`Name_${type}`) || `공법 유형 ${type}`,
-    gridCost: readInteger(args[8], 1),
-    masteredGridCost: Math.max(readInteger(args[8], 1) - 1, 1),
+    gridCost: readInteger(fields.gridCost, 1),
+    masteredGridCost: Math.max(readInteger(fields.gridCost, 1) - 1, 1),
     specificGrids,
-    genericGrid: readInteger(args[33], 0),
+    genericGrid: readInteger(fields.genericGrid, 0),
     sect,
     sectName: organizationKo.get(`Name_${sect}`) || `세력 ${sect}`,
     sectNameCn: organizationCn.get(`Name_${sect}`) || `Sect${sect}`,
@@ -824,19 +913,21 @@ for (const call of extractCalls(combatSource, "CombatSkillItem")) {
       effectId: directId,
       name: effectKo.get(`Name_${directId}`) || "정련",
       short: valuesFor(effectKo, "ShortDesc", directId),
+      summary: directSummary,
       description: directDesc,
-      tags: detectTags([directDesc, directCn].join(" "), code),
+      tags: detectTags(`${directSummary || directSummaryCn} ${directDesc || directCn}`, effectiveCode(directAnalysis)),
       analysis: directAnalysis,
     },
     reverse: {
       effectId: reverseId,
       name: effectKo.get(`Name_${reverseId}`) || "역련",
       short: valuesFor(effectKo, "ShortDesc", reverseId),
+      summary: reverseSummary,
       description: reverseDesc,
-      tags: detectTags([reverseDesc, reverseCn].join(" "), code),
+      tags: detectTags(`${reverseSummary || reverseSummaryCn} ${reverseDesc || reverseCn}`, effectiveCode(reverseAnalysis)),
       analysis: reverseAnalysis,
     },
-    tags: detectTags(sharedText, code),
+    tags: detectTags(sharedText, `${effectiveCode(directAnalysis)}\n${effectiveCode(reverseAnalysis)}`),
     codeClass: className,
     codeVerified: Boolean(code),
     combat: {
@@ -853,42 +944,42 @@ for (const call of extractCalls(combatSource, "CombatSkillItem")) {
       compatibleWeaponGroups: [...compatibleWeaponMap.values()],
       minDistance: rangeMin,
       maxDistance: rangeMax,
-      prepareProgress: readInteger(args[61], 0),
+      prepareProgress: readInteger(fields.prepareTotalProgress, 0),
       requiredBodyParts,
-      mobilityCost: readInteger(args[63], 0),
-      breathStanceCost: readInteger(args[64], 0),
-      baseInnerRatio: readInteger(args[65], 0),
-      innerRatioChangeRange: readInteger(args[66], 0),
-      penetrate: readInteger(args[67], 0),
-      weaponDurabilityCost: readInteger(args[70], 0),
-      wugCost: readInteger(args[71], 0),
+      mobilityCost: readInteger(fields.mobilityCost, 0),
+      breathStanceCost: readInteger(fields.breathStanceTotalCost, 0),
+      baseInnerRatio: readInteger(fields.baseInnerRatio, 0),
+      innerRatioChangeRange: readInteger(fields.innerRatioChangeRange, 0),
+      penetrate: readInteger(fields.penetrate, 0),
+      weaponDurabilityCost: readInteger(fields.weaponDurableCost, 0),
+      wugCost: readInteger(fields.wugCost, 0),
       injuryPartDistribution,
-      totalHit: readInteger(args[75], 0),
+      totalHit: readInteger(fields.totalHit, 0),
       hitPowerDistribution,
-      hasAcupointEffect: /true/.test(args[77]),
-      hasFlawEffect: /true/.test(args[78]),
+      hasAcupointEffect: /true/.test(fields.hasAtkAcupointEffect),
+      hasFlawEffect: /true/.test(fields.hasAtkFlawEffect),
       poisons,
-      equipmentBreakOdds: readInteger(args[80], 0),
-      addWugType: readInteger(args[81], -1),
-      addMoveSpeedOnCast: readInteger(args[83], 0),
-      addPercentMoveSpeedOnCast: readInteger(args[84], 0),
-      moveCdBonus: readInteger(args[85], 0),
-      mobilityReduceSpeed: readInteger(args[87], 0),
-      mobilityAddSpeed: readInteger(args[88], 0),
-      moveCostMobility: readInteger(args[89], 0),
-      maxJumpDistance: readInteger(args[90], -1),
-      jumpPrepareFrame: readInteger(args[91], -1),
-      canPartlyJump: /true/.test(args[92]),
-      fightBackDamage: readInteger(args[102], 0),
-      bounceOuterInjury: readInteger(args[103], 0),
-      bounceInnerInjury: readInteger(args[104], 0),
-      continuousFrames: readInteger(args[105], 0),
-      bounceDistance: readInteger(args[106], 0),
+      equipmentBreakOdds: readInteger(fields.equipmentBreakOdds, 0),
+      addWugType: readInteger(fields.addWugType, -1),
+      addMoveSpeedOnCast: readInteger(fields.addMoveSpeedOnCast, 0),
+      addPercentMoveSpeedOnCast: readInteger(fields.addPercentMoveSpeedOnCast, 0),
+      moveCdBonus: readInteger(fields.moveCdBonus, 0),
+      mobilityReduceSpeed: readInteger(fields.mobilityReduceSpeed, 0),
+      mobilityAddSpeed: readInteger(fields.mobilityAddSpeed, 0),
+      moveCostMobility: readInteger(fields.moveCostMobility, 0),
+      maxJumpDistance: readInteger(fields.maxJumpDistance, -1),
+      jumpPrepareFrame: readInteger(fields.jumpPrepareFrame, -1),
+      canPartlyJump: /true/.test(fields.canPartlyJump),
+      fightBackDamage: readInteger(fields.fightBackDamage, 0),
+      bounceOuterInjury: readInteger(fields.bounceRateOfOuterInjury, 0),
+      bounceInnerInjury: readInteger(fields.bounceRateOfInnerInjury, 0),
+      continuousFrames: readInteger(fields.continuousFrames, 0),
+      bounceDistance: readInteger(fields.bounceDistance, 0),
       propertyBonuses,
       outerDamageSteps,
       innerDamageSteps,
-      fatalDamageStep: readInteger(args[116], 0),
-      mindDamageStep: readInteger(args[117], 0),
+      fatalDamageStep: readInteger(fields.fatalDamageStep, 0),
+      mindDamageStep: readInteger(fields.mindDamageStep, 0),
     },
   });
 }
@@ -908,9 +999,10 @@ function effectFor(skill, mode) {
 }
 
 function edgeMatches(edge, verbs, target, resource = null) {
+  const targets = Array.isArray(target) ? target : [target];
   return edge.confidence >= 2
     && verbs.includes(edge.verb)
-    && edge.target === target
+    && targets.includes(edge.target)
     && (resource === null || edge.resource === resource);
 }
 
@@ -952,21 +1044,21 @@ function evaluateSynergy(selected, selectedMode, candidate, candidateMode) {
   }
 
   for (const supply of aEdges.filter((edge) => edgeMatches(edge, supplies, "자신") && edge.valence === "이로운 상태" && isSpecificRelationResource(edge.resource))) {
-    const need = bEdges.find((edge) => edgeMatches(edge, needs, "자신", supply.resource));
+    const need = bEdges.find((edge) => edgeMatches(edge, needs, ["자신", "양측"], supply.resource));
     if (need) best.consider(46, `선택 공법이 공급하는 「${supply.resource}」을 이 공법의 발동·소모 조건으로 직접 사용`, "resource-chain", supply.resource, `${supply.evidence} / ${need.evidence}`);
   }
   for (const supply of bEdges.filter((edge) => edgeMatches(edge, supplies, "자신") && edge.valence === "이로운 상태" && isSpecificRelationResource(edge.resource))) {
-    const need = aEdges.find((edge) => edgeMatches(edge, needs, "자신", supply.resource));
+    const need = aEdges.find((edge) => edgeMatches(edge, needs, ["자신", "양측"], supply.resource));
     if (need) best.consider(48, `이 공법이 공급하는 「${supply.resource}」으로 선택 공법의 발동·소모 조건을 완성`, "resource-chain", supply.resource, `${supply.evidence} / ${need.evidence}`);
   }
   for (const supply of aEdges.filter((edge) => edgeMatches(edge, supplies, "적") && edge.valence === "해로운 상태" && isSpecificRelationResource(edge.resource))) {
-    const follow = bEdges.find((edge) => edgeMatches(edge, needs, "적", supply.resource));
+    const follow = bEdges.find((edge) => edgeMatches(edge, needs, ["적", "양측"], supply.resource));
     if (follow) best.consider(50, `선택 공법이 적에게 남기는 「${supply.resource}」을 이 공법이 조건·소모·증폭에 사용`, "offense-chain", supply.resource, `${supply.evidence} / ${follow.evidence}`);
     const sameStack = bEdges.find((edge) => edgeMatches(edge, supplies, "적", supply.resource));
     if (sameStack) best.consider(27, `두 공법이 적의 「${supply.resource}」 축적을 같은 대상에 누적`, "offense-stack", supply.resource, `${supply.evidence} / ${sameStack.evidence}`);
   }
   for (const supply of bEdges.filter((edge) => edgeMatches(edge, supplies, "적") && edge.valence === "해로운 상태" && isSpecificRelationResource(edge.resource))) {
-    const follow = aEdges.find((edge) => edgeMatches(edge, needs, "적", supply.resource));
+    const follow = aEdges.find((edge) => edgeMatches(edge, needs, ["적", "양측"], supply.resource));
     if (follow) best.consider(52, `이 공법이 적에게 만드는 「${supply.resource}」을 선택 공법이 조건·소모·증폭에 사용`, "offense-chain", supply.resource, `${supply.evidence} / ${follow.evidence}`);
   }
 
@@ -981,7 +1073,10 @@ function evaluateSynergy(selected, selectedMode, candidate, candidateMode) {
 
   const candidateMakesTrick = bEdges.find((edge) => edgeMatches(edge, supplies, "자신", "식"));
   const candidateMechanicText = [candidateEffect.description, ...candidateEffect.short, ...candidateEffect.analysis.mechanicAxes, ...candidateEffect.analysis.mechanicLabels].join(" ");
-  const suppliedTrick = selected.combat.trickCost.find((cost) => candidateMechanicText.includes(cost.name) || (cost.nameCn && candidateMechanicText.includes(cost.nameCn)));
+  const suppliedTrick = selected.combat.trickCost.find((cost) => [cost.name, cost.nameCn].filter(Boolean).some((name) => {
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`「${escaped}」\\s*(?:식|式)|(?:^|[^가-힣A-Za-z])${escaped}\\s+(?:식|式)(?:[^가-힣A-Za-z]|$)`).test(candidateMechanicText);
+  }));
   if (candidateMakesTrick && suppliedTrick) {
     best.consider(42, `시전에 필요한 「${suppliedTrick.name}」 식을 직접 추가·변환해 준비 시간을 단축`, "trick-supply", suppliedTrick.name, candidateMakesTrick.evidence);
   }
@@ -1015,7 +1110,7 @@ function evaluateCounter(selected, selectedMode, candidate, candidateMode) {
   const aBan = selectedEffect.analysis.banControl;
   const bBan = candidateEffect.analysis.banControl;
 
-  if (bBan.deniedElements.includes(selected.elementName)) {
+  if (!aBan.immune && bBan.deniedElements.includes(selected.elementName)) {
     best.consider(70, `적의 「${selected.elementName}」 공법을 직접 봉금해 선택 공법의 시전을 제한`, "element-denial", `${selected.elementName} 공법`, candidateEffect.description);
   }
   if (bBan.weakenedElements.includes(selected.elementName)) {
@@ -1132,6 +1227,29 @@ const payload = {
   weapons,
   affectedFields,
   ui: uiProfile,
+  legendaryBook,
+  dlc: {
+    // Localization/config keys identify content; installed ownership is not inferred.
+    entries: [...dlcKo.keys()].filter((key) => /^Desc_\d+_2$/.test(key))
+      .map((key) => ({ key, id: Number(key.split("_")[1]), title: cleanText(dlcKo.get(key)), description: cleanText(dlcKo.get(key.replace(/_2$/, "_1"))) }))
+      .filter((entry) => /플레이 DLC|玩法DLC/.test(entry.title)),
+    specialSkillIds: skills.filter((skill) => /Animal\.Loong\./.test(skill.codeClass || "") || (/CombatSkill\.XiangShu\./.test(skill.codeClass || "") && (/\.TianDi\./.test(skill.codeClass || "") || /천제/.test(skill.direct.description)))).map((skill) => skill.id),
+    carriers: [...(indexCodeClasses()?.values() || [])].flat()
+      .filter((item) => /Animal[\\/]Loong[\\/]Carrier/.test(item.path) && /CombatStateId\s*=>/.test(item.source))
+      .map((item) => {
+        const id = Number(item.source.match(/CombatStateId\s*=>\s*(\d+)/)?.[1]);
+        return { id, name: cleanText(stateKo.get(`Name_${id}`)), description: cleanText(stateKo.get(`TipsDesc_${id}`)), className: item.name,
+          codeConstants: [...item.source.matchAll(/(?:private|protected|public)\s+const\s+(?:int|short)\s+(\w+)\s*=\s*(-?\d+)/g)].map((match) => ({ name: match[1], value: Number(match[2]) })),
+          analysis: analyzeEffect(stateKo.get(`TipsDesc_${id}`) || "", "", assembleEffectCode(item, indexCodeClasses()), "direct") };
+      }).filter((item) => item.name && item.description),
+    chickenEffects: [...uiKo.keys()].filter((key) => /^LK_ChickenCombat_Effect_Title_\d+$/.test(key)).map((key) => {
+      const id = Number(key.split("_").at(-1));
+      return { id, name: cleanText(uiKo.get(key)), description: cleanText(uiKo.get(`LK_ChickenCombat_Effect_Desc_Detail_${id}`)) };
+    }),
+    chickenFormations: [...uiKo.keys()].filter((key) => /^LK_SelectCombatChicken_(?:Basic|Extra)Effect_\d+_0$/.test(key)).map((key) => ({
+      name: cleanText(uiKo.get(key)), condition: cleanText(uiKo.get(key.replace(/_0$/, "_1"))), description: cleanText(uiKo.get(key.replace(/_0$/, "_2"))),
+    })),
+  },
   skills,
 };
 

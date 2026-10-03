@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const args = process.argv.slice(2);
-const rawVersion = args.find((value) => /^v?\d+\.\d+\.\d+$/.test(value)) || "v1.2.0";
+const rawVersion = args.find((value) => /^v?\d+\.\d+\.\d+$/.test(value)) || "v1.3.0";
 const version = rawVersion.startsWith("v") ? rawVersion : `v${rawVersion}`;
 const valueOf = (name, fallback) => {
   const index = args.indexOf(name);
@@ -55,7 +55,7 @@ for (const file of launcherFiles) cpSync(join(launcherRoot, file), join(stage, f
 
 const extractorTarget = join(stage, "extractor");
 mkdirSync(extractorTarget, { recursive: true });
-for (const file of ["code-ir.mjs", "embed-portable-assets.mjs", "extract.mjs", "THIRD_PARTY_NOTICES.txt"]) {
+for (const file of ["code-ir.mjs", "code-composition.mjs", "config-schema.mjs", "embed-portable-assets.mjs", "extract.mjs", "THIRD_PARTY_NOTICES.txt"]) {
   cpSync(join(root, "extractor", file), join(extractorTarget, file));
 }
 cpSync(runtimeRoot, join(stage, ".runtime"), { recursive: true });
@@ -72,7 +72,7 @@ if (platform === "windows") {
   normalizeText(join(stage, "find-taiwu-game.ps1"), "\r\n", true);
   normalizeText(join(stage, "run-extractor.ps1"), "\r\n", true);
 } else {
-  for (const file of ["README.md", "find-taiwu-game.sh", "taiwu-martial-extractor.sh", "extractor/code-ir.mjs", "extractor/embed-portable-assets.mjs", "extractor/extract.mjs"]) {
+  for (const file of ["README.md", "find-taiwu-game.sh", "taiwu-martial-extractor.sh", "extractor/code-ir.mjs", "extractor/code-composition.mjs", "extractor/config-schema.mjs", "extractor/embed-portable-assets.mjs", "extractor/extract.mjs"]) {
     normalizeText(join(stage, file), "\n");
   }
   for (const file of [

@@ -19,7 +19,7 @@
     "test": "npm run build:pages && node --test \"tests/*.test.mjs\"",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern .pages-deploy --ignore-pattern worker-configuration.d.ts",
     "db:generate": "drizzle-kit generate",
-    "cf:types": "wrangler types --include-runtime false"
+    "cf:types": "wrangler types"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",

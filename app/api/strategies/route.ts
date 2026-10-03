@@ -1,7 +1,7 @@
 import { and, count, desc, eq, gte } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { strategyBuilds, strategyVotes } from "../../../db/schema";
-import { createPasswordRecord, errorResponse, validateContent, validatePassword, validatePlan, validateTitle, visitorHash } from "./_shared";
+import { createPasswordRecord, errorResponse, readStoredPlan, validateContent, validatePassword, validatePlan, validateTitle, visitorHash } from "./_shared";
 
 export async function GET() {
   try {
@@ -21,7 +21,10 @@ export async function GET() {
       .groupBy(strategyBuilds.id)
       .orderBy(desc(voteCount), desc(strategyBuilds.createdAt))
       .limit(100);
-    return Response.json({ strategies: rows.map((row) => ({ ...row, plan: JSON.parse(row.planJson), planJson: undefined })) }, { headers: { "cache-control": "public, max-age=15" } });
+    return Response.json({ strategies: rows.map((row) => {
+      const stored = readStoredPlan(JSON.parse(row.planJson));
+      return { ...row, ...stored, planJson: undefined };
+    }) }, { headers: { "cache-control": "public, max-age=15" } });
   } catch (error) {
     return errorResponse(error, 500);
   }

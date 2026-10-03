@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "릴리스 버전 (예: v1.2.0)"
+        description: "릴리스 버전 (예: v1.3.0)"
         required: true
-        default: "v1.2.0"
+        default: "v1.3.0"
 
 permissions:
   contents: write
@@ -107,7 +107,7 @@ jobs:
           if gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$VERSION" "${assets[@]}" --clobber --repo "$GITHUB_REPOSITORY"
           else
-            gh release create "$VERSION" "${assets[@]}" --latest --repo "$GITHUB_REPOSITORY" \
+            gh release create "$VERSION" "${assets[@]}" --latest --target "$GITHUB_SHA" --repo "$GITHUB_REPOSITORY" \
               --title "태오회권 무공 추출기 ${VERSION} · 무설치 Windows + Linux/Proton" \
               --notes "Node.js, Python/UnityPy, .NET 8 런타임과 ILSpy를 포함한 포터블 릴리스입니다. 사용자는 운영체제용 압축 파일만 풀어 실행하면 되며 별도 개발 도구 설치나 첫 실행 다운로드가 필요하지 않습니다."
           fi

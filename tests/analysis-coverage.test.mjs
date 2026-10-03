@@ -33,7 +33,8 @@ test("every described effect retains a dynamic mechanic axis", () => {
 test("every effect receives inherited code logic instead of one-off exceptions", () => {
   const effects = data.skills.flatMap((skill) => [skill.direct, skill.reverse]);
   assert.equal(data.meta.schemaVersion, 4);
-  assert.ok(data.meta.analysisStats.codeLogicOperationCount > 8000);
+  // Event registration and cache invalidation are excluded from mutations.
+  assert.ok(data.meta.analysisStats.codeLogicOperationCount > 5000);
   assert.ok(data.meta.analysisStats.codeLogicConditionCount > 4000);
   assert.ok(effects.every((effect) => {
     const logic = effect.analysis.logic;
@@ -52,8 +53,106 @@ test("official Korean names and mastery slot trade-offs come from game data", ()
   assert.ok(data.skills.filter((skill) => skill.equipType === 0).every((skill) => skill.specificGrids.length <= 4 && Number.isInteger(skill.genericGrid)));
 });
 
+test("current ModFix preserves all 38 code-behavior description contracts across 29 skills", () => {
+  const contracts = [
+    [8, "summary", ["직접 외상", "중상 피해", "50%"]],
+    [1743, "description", ["현재 진기 총량과 같은 양", "후천 강기"]],
+    [74, "description", ["진기가 60% 증가", "약점"]],
+    [800, "summary", ["진기 소모량", "봉혈"]],
+    [800, "description", ["진기 소모량이 30% 감소", "봉혈"]],
+    [251, "description", ["누적 이동 거리가 1", "「파괴」 진기의 10%만큼"]],
+    [977, "description", ["누적 이동 거리가 1", "「호체」 진기의 10%만큼"]],
+    [981, "short", ["퇴법 강공"]],
+    [269, "description", ["정묘의 배분 비율과 같은 확률"]],
+    [276, "short", ["속공"]],
+    [1028, "description", ["최소 공격 거리가 2 감소"]],
+    [305, "summary", ["거리 1", "「파괴」 진기 2점"]],
+    [1031, "summary", ["거리 1", "「호체」 진기 2점"]],
+    [308, "description", ["7회", "직접 피해 합계의 40%만큼"]],
+    [1034, "description", ["7회", "직접 피해 합계의 40%만큼"]],
+    [142, "description", ["각력이 12% 회복"]],
+    [1248, "description", ["최소 공격 거리가 3 감소"]],
+    [569, "summary", ["같은 양의 중상 피해"]],
+    [569, "description", ["33% 증가", "같은 양의 중상 피해"]],
+    [377, "description", ["「무」 식 1개당 10%", "「무」 식 1개당 5%"]],
+    [579, "summary", ["최종 시전 속도가 50% 증가"]],
+    [579, "description", ["최종 시전 속도가 50% 증가"]],
+    [1305, "description", ["최종 시전 속도가 50% 감소"]],
+    [1434, "description", ["50% 확률", "1단계 봉혈"]],
+    [1136, "summary", ["적의 어기가 절반"]],
+    [1148, "description", ["40% 확률", "20%로 감소"]],
+    [436, "summary", ["초식 2개", "내구도 4", "「궤」 식 2개"]],
+    [1237, "description", ["약화 수치의 50%만큼"]],
+    [619, "description", ["이 공법 위력의 20%만큼"]],
+    [1345, "description", ["「호체」 공법 위력의 20%만큼 이 공법"]],
+    [1119, "description", ["1개마다", "5% 감소"]],
+    [668, "description", ["소모한 호흡의 25%만큼"]],
+    [1081, "summary", ["각 진기의 20%만큼"]],
+    [1557, "summary", ["직접 내상이 50% 감소", "직접 외상이 50% 증가"]],
+    [1563, "description", ["병기 공격 4회"]],
+    [1638, "description", ["각력·호흡·자세"]],
+    [1628, "description", ["중첩 1개마다", "위력이 30% 증가"]],
+    [1629, "description", ["중첩 1개마다", "위력이 40% 증가"]],
+  ];
+  const effects = data.skills.flatMap((skill) => [
+    { skill, effect: skill.direct },
+    { skill, effect: skill.reverse },
+  ]);
+  const byEffectId = new Map(effects.map((entry) => [entry.effect.effectId, entry]));
+  const modFix = data.meta.localizationMods.find((mod) => mod.name === "TaiwuKoreanCommunityFixes");
+
+  assert.equal(modFix?.version, "1.7.0.0");
+  assert.equal(contracts.length, 38);
+  for (const [effectId, field, needles] of contracts) {
+    const entry = byEffectId.get(effectId);
+    assert.ok(entry, `effect ${effectId} must map to a planner skill`);
+    const value = field === "short" ? entry.effect.short.join(" ") : entry.effect[field];
+    for (const needle of needles) assert.ok(value.includes(needle), `effect ${effectId} must include ${needle}`);
+  }
+  assert.equal(new Set(contracts.map(([effectId]) => byEffectId.get(effectId).skill.id)).size, 29);
+});
+
+test("이합지 direct 無-trick and reverse stun-mark relationships stay separated", () => {
+  const yiHeZhi = data.skills.find((skill) => skill.id === 436);
+  const directEdges = yiHeZhi.direct.analysis.semanticEdges;
+  const reverseEdges = yiHeZhi.reverse.analysis.semanticEdges;
+
+  assert.ok(yiHeZhi.direct.description.includes("「무」 식 1개당 10%"));
+  assert.ok(!yiHeZhi.direct.description.includes("실신 표식"));
+  assert.ok(yiHeZhi.reverse.description.includes("실신 표식 1개당"));
+  assert.ok(!yiHeZhi.reverse.description.includes("「무」 식"));
+  assert.ok(yiHeZhi.direct.analysis.concepts.includes("무 식"));
+  assert.ok(!yiHeZhi.direct.analysis.concepts.includes("실신"));
+  assert.ok(yiHeZhi.reverse.analysis.concepts.includes("실신"));
+  assert.ok(!yiHeZhi.reverse.analysis.concepts.includes("무 식"));
+  assert.ok(directEdges.some((edge) => edge.verb === "requires" && edge.resource === "무 식" && edge.target === "양측"));
+  assert.ok(!directEdges.some((edge) => edge.verb === "produces" && edge.resource === "무 식"));
+  assert.ok(reverseEdges.some((edge) => edge.verb === "requires" && edge.resource === "실신" && edge.target === "양측"));
+  assert.ok(!reverseEdges.some((edge) => edge.verb === "produces" && edge.resource === "실신"));
+  assert.equal(yiHeZhi.direct.analysis.banControl.creates, false);
+  assert.equal(yiHeZhi.reverse.analysis.banControl.creates, false);
+  assert.ok(yiHeZhi.relations.direct.synergy.some((relation) => relation.basis === "offense-chain" && relation.resource === "무 식"));
+  assert.ok(!yiHeZhi.relations.direct.synergy.some((relation) => relation.resource === "실신"));
+  assert.ok(yiHeZhi.relations.reverse.synergy.some((relation) => relation.basis === "offense-chain" && relation.resource === "실신"));
+  assert.ok(!yiHeZhi.relations.reverse.synergy.some((relation) => relation.resource === "무 식"));
+});
+
+test("tooltip conditions do not use their resulting effect as a prerequisite", () => {
+  const movement = data.skills.find((skill) => skill.id === 164);
+  for (const mode of ["direct", "reverse"]) {
+    assert.ok(!movement[mode].analysis.semanticEdges.some((edge) => edge.verb === "requires" && edge.resource === "실신"));
+  }
+  const mirror = data.skills.find((skill) => skill.id === 260);
+  assert.ok(mirror.reverse.analysis.semanticEdges.some((edge) => edge.verb === "requires" && edge.resource === "실신" && edge.target === "자신"));
+  assert.ok(!mirror.reverse.analysis.semanticEdges.some((edge) => edge.verb === "requires" && edge.resource === "실신" && ["적", "양측"].includes(edge.target)));
+  const defense = data.skills.find((skill) => skill.id === 270);
+  assert.ok(defense.reverse.analysis.semanticEdges.some((edge) => edge.verb === "requires" && edge.resource === "실신" && edge.target === "적"));
+  const dragon = data.skills.find((skill) => skill.id === 950);
+  assert.ok(!dragon.relations.direct.synergy.some((relation) => relation.basis === "offense-chain" && [164, 260].includes(relation.skillId)));
+});
+
 test("every recommendation has a target-aware causal proof", () => {
-  const harmful = new Set(["직접 피해", "피해", "외상", "내상", "중상", "부상", "오래된 부상", "파열", "봉혈", "실신", "필사 표식", "패배 표식", "독", "독 등급", "고독", "내식 문란", "약화 상태", "봉금", "무기 내구도"]);
+  const harmful = new Set(["직접 피해", "피해", "외상", "내상", "중상", "부상", "오래된 부상", "파열", "봉혈", "실신", "필사 표식", "패배 표식", "독", "독 등급", "고독", "내식 문란", "약화 상태", "봉금", "무 식", "무기 내구도"]);
   const inverse = new Set(["clears", "reduces", "prevents", "consumes"]);
   const byId = new Map(data.skills.map((skill) => [skill.id, skill]));
   assert.equal(data.meta.relationAudit.missingEvidenceCount, 0);
@@ -86,7 +185,7 @@ test("every recommendation has a target-aware causal proof", () => {
 });
 
 test("enemy healing is never reinterpreted as a counter", () => {
-  const harmful = new Set(["직접 피해", "피해", "외상", "내상", "중상", "부상", "오래된 부상", "파열", "봉혈", "실신", "필사 표식", "패배 표식", "독", "독 등급", "고독", "내식 문란", "약화 상태", "봉금", "무기 내구도"]);
+  const harmful = new Set(["직접 피해", "피해", "외상", "내상", "중상", "부상", "오래된 부상", "파열", "봉혈", "실신", "필사 표식", "패배 표식", "독", "독 등급", "고독", "내식 문란", "약화 상태", "봉금", "무 식", "무기 내구도"]);
   const inverse = new Set(["clears", "reduces", "prevents", "consumes"]);
   const invalidEdges = data.skills.flatMap((skill) => [skill.direct, skill.reverse]).flatMap((effect) => effect.analysis.semanticEdges)
     .filter((edge) => inverse.has(edge.verb) && edge.target === "적" && harmful.has(edge.resource));
@@ -138,4 +237,51 @@ test("weapon range and trick requirements are joined to martial arts", () => {
   assert.equal(daLiKaiBeiZhang.combat.minDistance, 20);
   assert.equal(daLiKaiBeiZhang.combat.maxDistance, 60);
   assert.ok(daLiKaiBeiZhang.combat.compatibleWeaponGroups.length > 0);
+});
+
+test("major update includes localized DLC support and all nine added skills with original icons", async () => {
+  assert.equal(data.meta.gameVersion, "1.1.27.0");
+  assert.equal(data.meta.skillCount, 955);
+  assert.deepEqual(data.dlc.entries.map((entry) => entry.id), [12, 13, 14]);
+  assert.equal(data.dlc.chickenEffects.length, 8);
+  assert.equal(data.dlc.chickenFormations.length, 11);
+  assert.equal(data.dlc.carriers.filter((entry) => entry.id >= 253).length, 5);
+  for (const skill of data.skills.filter((skill) => skill.id >= 946)) {
+    assert.ok(data.dlc.specialSkillIds.includes(skill.id), `${skill.id} ${skill.name} must be in the special-skill guide`);
+    assert.ok(skill.direct.description);
+    await readFile(new URL(`../public/game-ui/combatskilliconlegacy/${skill.icon}.png`, import.meta.url));
+  }
+});
+
+test("support arts with no weapon do not inherit arbitrary non-grouped weapon ranges", () => {
+  const noWeapon = data.skills.filter((skill) => skill.combat.fixedWeaponId < 0 && skill.combat.recommendedWeaponId < 0);
+  assert.ok(noWeapon.length > 100);
+  for (const skill of noWeapon) {
+    assert.equal(skill.combat.minDistance, null);
+    assert.equal(skill.combat.maxDistance, null);
+    for (const mode of ["direct", "reverse"]) assert.ok(!skill.relations[mode].synergy.some((relation) => relation.basis === "range-extension"));
+  }
+});
+
+test("dragon implementations expose poison and injury operations, immunity scope and correctly targeted range effects", () => {
+  const poison = data.skills.find((skill) => skill.id === 951);
+  assert.ok(poison.direct.analysis.logic.operations.some((operation) => operation.symbol === "AddPoison" && operation.target === "적"));
+  const fire = data.skills.find((skill) => skill.id === 953);
+  assert.ok(fire.direct.analysis.semanticEdges.some((edge) => edge.verb === "amplifies" && edge.target === "적" && edge.resource === "외상"));
+  const wood = data.skills.find((skill) => skill.id === 952);
+  assert.ok(wood.direct.analysis.semanticEdges.some((edge) => edge.resource === "공격 거리" && edge.target === "적" && edge.verb === "reduces"));
+  assert.ok(wood.direct.analysis.semanticEdges.some((edge) => edge.resource === "공격 거리" && edge.target === "자신" && edge.verb === "produces"));
+  for (const skill of data.skills.filter((skill) => skill.id >= 950)) for (const mode of ["direct", "reverse"]) {
+    assert.equal(skill[mode].analysis.banControl.immune, true);
+    assert.match(skill[mode].analysis.banControl.immunityCondition, /짐승 형태/);
+    assert.ok(!skill.relations[mode].counter.some((relation) => relation.basis === "element-denial"));
+  }
+});
+
+test("神-trick supplies are matched as tricks, never the substring in 자신", () => {
+  for (const skill of data.skills) for (const mode of ["direct", "reverse"]) for (const relation of skill.relations[mode].synergy) {
+    if (relation.basis !== "trick-supply" || relation.resource !== "신") continue;
+    const candidate = data.skills.find((entry) => entry.id === relation.skillId)[relation.mode];
+    assert.match([candidate.description, ...candidate.short, ...candidate.analysis.mechanicAxes, ...candidate.analysis.mechanicLabels].join(" "), /「(?:신|神)」\s*(?:식|式)|(?:^|[^가-힣A-Za-z])(?:신|神)\s+(?:식|式)/);
+  }
 });

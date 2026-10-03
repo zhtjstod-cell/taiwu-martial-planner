@@ -5,13 +5,13 @@ const resourceRules = [
   ["부상", /Injur|Wound/i],
   ["파열", /Flaw/i],
   ["봉혈", /Acupoint/i],
-  ["실신", /MindMark|MindDamage/i],
+  ["실신", /MindMark|MindDamage|DamageMind/i],
   ["필사 표식", /FatalMark|FatalDamage|EMarkType\.Fatal/i],
   ["패배 표식", /DefeatMark|AboutToFall/i],
   ["독", /Poison/i],
   ["고독", /Wug|GuEffect/i],
   ["내식 문란", /Disorder|InternalInjury/i],
-  ["자세", /Stance/i],
+  ["자세", /Stance/],
   ["호흡", /Breath|TeQi/i],
   ["신법", /Mobility|Agile/i],
   ["진기", /NeiliAllocation|Neili|QiAllocation/i],
@@ -135,7 +135,7 @@ function resourcesFor(text) {
 }
 
 function targetFor(text) {
-  const self = /base\.CombatChar|\bCombatChar\.|Self|self|Owner|owner|Caster|caster|Attacker|attacker/i.test(text);
+  const self = /base\.CombatChar|\bCombatChar\b|Self|self|Owner|owner|Caster|caster|Attacker|attacker/i.test(text);
   const enemy = /Enemy|enemy|Opponent|opponent|Target|target|Defender|defender/i.test(text);
   if (self && enemy) return "양측";
   if (enemy) return "적";
@@ -144,6 +144,8 @@ function targetFor(text) {
 }
 
 function verbFor(symbol, snippet) {
+  // Event wiring and cache invalidation are not combat state mutations.
+  if (/RegisterHandler|UnRegisterHandler|PostDataModificationHandler|Invalid.*Cache|InvalidateCache/i.test(symbol)) return null;
   // Queries only discover bannable skills; the actual state change is made by
   // SilenceSkill/ClearSkillCd. Treating every "Banable" getter as a prevention
   // operation used to turn unrelated DisableJumpMove calls into false 봉금
@@ -155,7 +157,7 @@ function verbFor(symbol, snippet) {
   if (/Prevent|Block|Ignore|Immune|Disable|Ban|Seal|Invalid/i.test(symbol)) return "prevents";
   if (/Cost|Consume|Spend|Expend|Drain|Subtract|Deduct/i.test(symbol)) return "consumes";
   if (/Reduce|Decrease|Lower|Weaken|Shorten/i.test(symbol)) return "reduces";
-  if (/Boost|Enhance|Amplif|Increase|Raise|Extend|Accelerate/i.test(symbol)) return "amplifies";
+  if (/Boost|Enhance|Amplif|Increase|Raise|Extend|Accelerate|Worsen/i.test(symbol)) return "amplifies";
   if (/Add|Create|Generate|Apply|Gain|Recover|Heal|Attach|Award|Spawn|Inflict/i.test(symbol)) return "produces";
   if (/Change|Set|Modify|Update|Convert|Transform/i.test(symbol)) {
     if (/[-]\s*(?:\d|[A-Za-z_])|-=|Subtract/i.test(snippet)) return "reduces";
@@ -213,6 +215,29 @@ export function extractCodeLogic(source, mode) {
 
   const symbols = [];
   const operations = [];
+  const operationTarget = (symbol, snippet, index) => {
+    const marker = [...inheritanceMarkers].reverse().find((item) => item.index <= index);
+    const preceding = code.slice(marker?.index || 0, index);
+    const methods = [...preceding.matchAll(/(?:public|private|protected|internal)[^;{}\n]*\([^;{}\n]*\)\s*\{/g)];
+    const method = methods.at(-1);
+    const scope = preceding.slice(method?.index || 0);
+    const aliases = new Map();
+    for (const match of scope.matchAll(/(?:CombatCharacter|var)\s+(\w+)\s*=\s*([^;]+);/g)) {
+      const expression = match[2];
+      let target = /GetCombatCharacter\(\s*!|CurrEnemyChar|_enemyChar/.test(expression) ? "적"
+        : /(?:EffectBase\.)?CombatChar\b|_selfChar/.test(expression) ? "자신" : targetFor(expression);
+      if (target === "전투 상태") target = aliases.get(expression.trim()) || target;
+      aliases.set(match[1], target);
+    }
+    // Known mutation signatures: the attacker argument is not the recipient.
+    const argumentsText = snippet.slice(snippet.indexOf("(") + 1);
+    const args = argumentsText.split(",");
+    const destinationIndex = /^(?:AddPoison|HealInjuryInCombat|HealPoisonInCombat)$/.test(symbol) ? 2
+      : /^(?:AddPowerDamageMind|SilenceSkill|AddFlaw|AddAcupoint|ChangeBreathValue|ChangeStanceValue|ChangeMobilityValue|ChangeDistance)$/.test(symbol) ? 1 : -1;
+    const receiver = destinationIndex >= 0 && /^context\s*$/.test(args[0]?.trim()) && args[destinationIndex]
+      ? args[destinationIndex].trim() : snippet.slice(0, snippet.indexOf("(")).replace(/\.\w+$/, "").trim();
+    return receiver ? aliases.get(receiver) || targetFor(receiver) : targetFor(snippet);
+  };
   const callPattern = /\b((?:base\.|DomainManager\.[A-Za-z0-9_.]+\.|[A-Za-z_][A-Za-z0-9_]*\.)?([A-Za-z_][A-Za-z0-9_]*))\s*\(/g;
   let call;
   while ((call = callPattern.exec(code))) {
@@ -229,6 +254,8 @@ export function extractCodeLogic(source, mode) {
     if (/_[A-Za-z0-9_]*(?:Pool|List|Dict|Collection|Cache|Temp)[A-Za-z0-9_]*\.(?:Add|AddRange|Remove|RemoveAt|Clear|Reset|Set)/i.test(snippet)) continue;
     if (/^(?:Generate|Create|Add).*(?:Pool|List|Dictionary|Cache)$/i.test(symbol)) continue;
     const resources = resourcesFor(`${symbol} ${snippet}`);
+    if (/Injury/.test(symbol) && /inner:\s*true/.test(snippet)) resources.push("내상");
+    if (/Injury/.test(symbol) && /inner:\s*false/.test(snippet)) resources.push("외상");
     if (verb === "reduces" && /Change|Cost|Use/i.test(symbol) && resources.some((resource) => ["진기", "자세", "호흡", "신법", "식", "무기 내구도"].includes(resource))) verb = "consumes";
     const numericValues = unique([...snippet.matchAll(/(?<![A-Za-z_])-?\d+(?:\.\d+)?/g)].map((match) => match[0])).slice(0, 8);
     if (!resources.length && /^(?:Add|AddRange|Remove|RemoveAt|Clear|Reset|Set|Change|Update|Create|Generate)$/i.test(symbol)) continue;
@@ -236,7 +263,7 @@ export function extractCodeLogic(source, mode) {
       symbol,
       verb,
       resources: resources.length ? resources : ["전투 상태"],
-      target: targetFor(snippet),
+      target: operationTarget(symbol, snippet, call.index),
       values: numericValues,
       evidence: snippet.slice(0, 220),
       ...provenanceAt(call.index),
@@ -244,7 +271,7 @@ export function extractCodeLogic(source, mode) {
   }
 
   const affectedFieldOccurrences = [
-    ...[...code.matchAll(/CreateAffectedData\(\s*(\d+)/g)].map((match) => ({ fieldId: Number(match[1]), ...provenanceAt(match.index) })),
+    ...[...code.matchAll(/CreateAffected(?:AllEnemy)?Data\(\s*(\d+)/g)].map((match) => ({ fieldId: Number(match[1]), ...provenanceAt(match.index) })),
     ...[...code.matchAll(/FieldId\s*==\s*(\d+)/g)].map((match) => ({ fieldId: Number(match[1]), ...provenanceAt(match.index) })),
     ...[...code.matchAll(/InvalidateCache\([^;\n]*?,\s*(\d+)\s*\)/g)].map((match) => ({ fieldId: Number(match[1]), ...provenanceAt(match.index) })),
   ];

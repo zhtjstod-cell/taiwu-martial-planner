@@ -4,11 +4,13 @@ type PagesEnv = Cloudflare.Env & {
 };
 
 type PublicPlan = {
-  equipped: { skillId: number; mode: "direct" | "reverse"; mastered: boolean }[];
+  schemaVersion: number;
+  equipped: { skillId: number; mode: "direct" | "reverse"; mastered: boolean; legendaryBookReduced: boolean }[];
   genericAllocation: number[];
   maxSlots: boolean;
 };
 
+const STRATEGY_PLAN_SCHEMA_VERSION = 2;
 const jsonHeaders = { "content-type": "application/json; charset=utf-8" };
 
 function json(value: unknown, init: ResponseInit = {}) {
@@ -80,13 +82,22 @@ function validatePlan(value: unknown): PublicPlan {
   if (!plan || typeof plan !== "object" || !Array.isArray(plan.equipped) || plan.equipped.length > 30) throw new Error("운공 조합 형식이 올바르지 않습니다.");
   const equipped = plan.equipped.map((entry) => {
     if (!Number.isInteger(entry?.skillId) || entry.skillId < 0 || entry.skillId > 100000 || !["direct", "reverse"].includes(entry.mode)) throw new Error("운공 조합의 무공 정보가 올바르지 않습니다.");
-    return { skillId: entry.skillId, mode: entry.mode, mastered: Boolean(entry.mastered) };
+    const legendaryBookReduced = Boolean(entry.legendaryBookReduced);
+    return { skillId: entry.skillId, mode: entry.mode, mastered: Boolean(entry.mastered) && !legendaryBookReduced, legendaryBookReduced };
   });
   const genericAllocation = Array.isArray(plan.genericAllocation)
-    ? plan.genericAllocation.slice(0, 4).map((item) => Math.max(0, Math.min(9, Number(item) || 0)))
+    ? plan.genericAllocation.slice(0, 4).map((item) => Math.max(0, Math.min(12, Number(item) || 0)))
     : [0, 0, 0, 0];
   while (genericAllocation.length < 4) genericAllocation.push(0);
-  return { equipped, genericAllocation, maxSlots: Boolean(plan.maxSlots) };
+  return { schemaVersion: STRATEGY_PLAN_SCHEMA_VERSION, equipped, genericAllocation, maxSlots: Boolean(plan.maxSlots) };
+}
+
+function readStoredPlan(value: unknown) {
+  const sourceSchemaVersion = Number((value as { schemaVersion?: unknown } | null)?.schemaVersion);
+  return {
+    plan: validatePlan(value),
+    planMigrated: !Number.isInteger(sourceSchemaVersion) || sourceSchemaVersion < STRATEGY_PLAN_SCHEMA_VERSION,
+  };
 }
 
 async function visitorHash(request: Request, secret: string) {
@@ -123,16 +134,19 @@ async function listStrategies(env: PagesEnv) {
     LIMIT 100
   `).all<{ id: number; title: string; content: string; dataset_version: string; plan_json: string; created_at: number; updated_at: number | null; votes: number }>();
   return json({
-    strategies: result.results.map((row) => ({
-      id: row.id,
-      title: row.title,
-      content: row.content,
-      datasetVersion: row.dataset_version,
-      plan: JSON.parse(row.plan_json),
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-      votes: Number(row.votes),
-    })),
+    strategies: result.results.map((row) => {
+      const stored = readStoredPlan(JSON.parse(row.plan_json));
+      return {
+        id: row.id,
+        title: row.title,
+        content: row.content,
+        datasetVersion: row.dataset_version,
+        ...stored,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        votes: Number(row.votes),
+      };
+    }),
   }, { headers: { "cache-control": "public, max-age=15" } });
 }
 
@@ -158,7 +172,7 @@ async function createStrategy(request: Request, env: PagesEnv) {
   return json({ id: result?.id }, { status: 201 });
 }
 
-async function authenticateStrategy(request: Request, env: PagesEnv, id: number) {
+async function authenticateStrategy(request: Request, env: PagesEnv, id: number): Promise<{ response: Response } | { body: { password?: unknown; title?: unknown; content?: unknown } }> {
   const length = Number(request.headers.get("content-length") || 0);
   if (length > 8_000) return { response: json({ error: "요청이 너무 큽니다." }, { status: 413 }) } as const;
   const body = await request.json() as { password?: unknown; title?: unknown; content?: unknown };

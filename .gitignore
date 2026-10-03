@@ -53,3 +53,4 @@ next-env.d.ts
 /windows-extractor/.runtime/
 /windows-extractor/output/
 /.devserver.*.log
+*.tsbuildinfo

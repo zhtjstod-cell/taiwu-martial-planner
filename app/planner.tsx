@@ -44,11 +44,22 @@ import rawSkills5 from "./data/combat-skills-5.json";
 import rawSkills6 from "./data/combat-skills-6.json";
 import rawSkills7 from "./data/combat-skills-7.json";
 import { createBuildFile, readBuildFile } from "./build-transfer.mjs";
+import DlcGuide, { type DlcProfile } from "./dlc-guide";
 
 const rawData = {
   ...rawManifest,
   skills: [...rawSkills0, ...rawSkills1, ...rawSkills2, ...rawSkills3, ...rawSkills4, ...rawSkills5, ...rawSkills6, ...rawSkills7],
 };
+
+const DEFAULT_MAX_SLOT_COUNT = 12;
+const MAX_EQUIP_SLOT_COUNTS = 5;
+const DEFAULT_LEGENDARY_BOOK_GRID_COST = 1;
+const DEFAULT_LEGENDARY_BOOK_REQUIREMENT_PERCENT = 50;
+const CURRENT_STRATEGY_PLAN_SCHEMA_VERSION = 2;
+
+function normalizeMaxSlots(maxSlotCounts: number[]) {
+  return Array.from({ length: MAX_EQUIP_SLOT_COUNTS }, (_, index) => Math.max(DEFAULT_MAX_SLOT_COUNT, Number.isFinite(maxSlotCounts[index]) && maxSlotCounts[index] > 0 ? maxSlotCounts[index] : DEFAULT_MAX_SLOT_COUNT));
+}
 
 type Mode = "direct" | "reverse";
 type SemanticEdge = {
@@ -72,6 +83,7 @@ type Analysis = {
     exploits: boolean;
     clears: boolean;
     resists: boolean;
+    immunityCondition?: string;
     deniedElements: string[];
     weakenedElements: string[];
   };
@@ -82,7 +94,7 @@ type Analysis = {
     coverage: { conditionCount: number; operationCount: number };
   };
 };
-type Effect = { effectId: number; name: string; short: string[]; description: string; tags: string[]; analysis: Analysis };
+type Effect = { effectId: number; name: string; short: string[]; summary?: string; description: string; tags: string[]; analysis: Analysis };
 type RawRelation = { skillId: number; mode: Mode; score: number; reason: string; basis: string; resource: string; evidence: string };
 type Skill = {
   id: number;
@@ -94,6 +106,7 @@ type Skill = {
   gradeIndex?: number;
   equipType: number;
   equipName: string;
+  type: number;
   typeName: string;
   gridCost: number;
   masteredGridCost: number;
@@ -118,7 +131,7 @@ type Skill = {
     poisons: { name: string; value: number }[];
   };
 };
-type Equipped = { skillId: number; mode: Mode; mastered: boolean };
+type Equipped = { skillId: number; mode: Mode; mastered: boolean; legendaryBookReduced: boolean };
 type Plan = { equipped: Equipped[]; genericAllocation: number[]; maxSlots: boolean };
 type Relation = RawRelation & { skill: Skill };
 type RelationPreview = RawRelation & {
@@ -126,7 +139,8 @@ type RelationPreview = RawRelation & {
   subjectSkillId: number;
   subjectMode: Mode;
 };
-type StrategyEntry = { id: number; title: string; content: string; datasetVersion: string; createdAt: number; updatedAt: number | null; votes: number; plan: Plan };
+type StrategyEntry = { id: number; title: string; content: string; datasetVersion: string; createdAt: number; updatedAt: number | null; votes: number; plan: Plan; planMigrated: boolean };
+type StrategyWireEntry = Omit<StrategyEntry, "plan" | "planMigrated"> & { plan: unknown; planMigrated?: boolean };
 type RelationReportEntry = {
   id: number;
   relationType: "synergy" | "counter";
@@ -149,6 +163,7 @@ type UiProfile = {
   supportsMultiplePlans: boolean;
 };
 type Dataset = {
+  dlc?: DlcProfile;
   meta: {
     schemaVersion: number;
     datasetVersion?: string;
@@ -161,6 +176,14 @@ type Dataset = {
   };
   ui: UiProfile;
   skills: Skill[];
+  legendaryBook?: {
+    gridCostRule?: {
+      targetCost: number;
+      requirementPercent: number;
+      perSkillTypeLimit: number;
+      supportedSkillTypes: number[];
+    };
+  };
   assets?: { combatSkillIcons?: Record<string, string> };
   [key: string]: unknown;
 };
@@ -193,21 +216,49 @@ function effectFor(skill: Skill, mode: Mode) {
   return skill[mode];
 }
 
-function effectiveCost(skill: Skill, mastered: boolean) {
-  return mastered ? skill.masteredGridCost : skill.gridCost;
+type LegendaryBookGridCostRule = {
+  targetCost: number;
+  requirementPercent: number;
+  perSkillTypeLimit: number;
+  supportedSkillTypes: number[];
+};
+
+function legendaryBookGridCostRule(dataset: Dataset): LegendaryBookGridCostRule {
+  const extracted = dataset.legendaryBook?.gridCostRule;
+  return {
+    targetCost: Math.max(1, Number(extracted?.targetCost) || DEFAULT_LEGENDARY_BOOK_GRID_COST),
+    requirementPercent: Math.max(0, Number(extracted?.requirementPercent) || DEFAULT_LEGENDARY_BOOK_REQUIREMENT_PERCENT),
+    perSkillTypeLimit: Math.max(1, Number(extracted?.perSkillTypeLimit) || 1),
+    supportedSkillTypes: Array.isArray(extracted?.supportedSkillTypes) && extracted.supportedSkillTypes.length ? extracted.supportedSkillTypes : Array.from({ length: 14 }, (_, index) => index),
+  };
+}
+
+function effectiveCost(skill: Skill, entry: Equipped, legendaryBookRule: LegendaryBookGridCostRule) {
+  if (entry.legendaryBookReduced && legendaryBookRule.supportedSkillTypes.includes(skill.type)) return Math.min(skill.gridCost, legendaryBookRule.targetCost);
+  return entry.mastered ? skill.masteredGridCost : skill.gridCost;
 }
 
 function blankPlan(): Plan {
   return { equipped: [], genericAllocation: [0, 0, 0, 0], maxSlots: false };
 }
 
+function migrateEquipped(entry: Partial<Equipped>): Equipped {
+  const legendaryBookReduced = Boolean(entry.legendaryBookReduced);
+  return {
+    skillId: Number(entry.skillId),
+    mode: entry.mode === "reverse" ? "reverse" : "direct",
+    mastered: Boolean(entry.mastered) && !legendaryBookReduced,
+    legendaryBookReduced,
+  };
+}
+
 function migratePlans(value: unknown): Plan[] {
-  if (!Array.isArray(value)) return [{ equipped: [{ skillId: 287, mode: "direct", mastered: false }], genericAllocation: [0, 0, 0, 0], maxSlots: false }, ...Array.from({ length: 5 }, blankPlan)];
+  if (!Array.isArray(value)) return [{ equipped: [{ skillId: 287, mode: "direct", mastered: false, legendaryBookReduced: false }], genericAllocation: [0, 0, 0, 0], maxSlots: false }, ...Array.from({ length: 5 }, blankPlan)];
   const migrated = value.map((item): Plan => {
-    if (Array.isArray(item)) return { equipped: item.map((entry) => ({ ...entry, mastered: Boolean(entry.mastered) })), genericAllocation: [0, 0, 0, 0], maxSlots: false };
+    if (Array.isArray(item)) return { equipped: item.map((entry) => migrateEquipped(entry)), genericAllocation: [0, 0, 0, 0], maxSlots: false };
     const candidate = item as Partial<Plan>;
     return {
-      equipped: Array.isArray(candidate.equipped) ? candidate.equipped.map((entry) => ({ ...entry, mastered: Boolean(entry.mastered) })) : [],
+      equipped: Array.isArray(candidate.equipped) ? candidate.equipped.map(migrateEquipped) : [],
       genericAllocation: Array.isArray(candidate.genericAllocation) ? [...candidate.genericAllocation.slice(0, 4), 0, 0, 0, 0].slice(0, 4).map((count) => Math.max(0, Number(count) || 0)) : [0, 0, 0, 0],
       maxSlots: Boolean(candidate.maxSlots),
     };
@@ -216,8 +267,16 @@ function migratePlans(value: unknown): Plan[] {
   return migrated.slice(0, 6);
 }
 
-function computeLayout(plan: Plan, skills: Skill[], uiProfile: UiProfile) {
-  const max = uiProfile.maxSlotCounts;
+function migrateStrategyPlan(value: unknown, serverMigrated = false) {
+  const sourceSchemaVersion = Number((value as { schemaVersion?: unknown } | null)?.schemaVersion);
+  return {
+    plan: migratePlans([value])[0],
+    planMigrated: serverMigrated || !Number.isInteger(sourceSchemaVersion) || sourceSchemaVersion < CURRENT_STRATEGY_PLAN_SCHEMA_VERSION,
+  };
+}
+
+function computeLayout(plan: Plan, skills: Skill[], uiProfile: UiProfile, legendaryBookRule: LegendaryBookGridCostRule) {
+  const max = normalizeMaxSlots(uiProfile.maxSlotCounts);
   const initial = plan.maxSlots ? [...max.slice(0, 5), 0] : uiProfile.initialSlotCounts.length === 6 ? uiProfile.initialSlotCounts : [6, 1, 1, 1, 1, 0];
   const activeSkillIds = new Set<number>();
   let usedInner = 0;
@@ -227,7 +286,7 @@ function computeLayout(plan: Plan, skills: Skill[], uiProfile: UiProfile) {
   for (const entry of plan.equipped) {
     const skill = skills.find((candidate) => candidate.id === entry.skillId);
     if (!skill || skill.equipType !== 0) continue;
-    usedInner += effectiveCost(skill, entry.mastered);
+    usedInner += effectiveCost(skill, entry, legendaryBookRule);
     if (usedInner > specific[0]) continue;
     activeSkillIds.add(skill.id);
     if (entry.mastered) genericPool += skill.gridCost;
@@ -236,27 +295,43 @@ function computeLayout(plan: Plan, skills: Skill[], uiProfile: UiProfile) {
       genericPool += skill.genericGrid;
     }
   }
-  for (let equipType = 0; equipType < 5; equipType += 1) specific[equipType] = Math.min(max[equipType] || 9, specific[equipType]);
+  for (let equipType = 0; equipType < 5; equipType += 1) specific[equipType] = Math.min(max[equipType], specific[equipType]);
 
   const allocation = [0, 0, 0, 0];
   let genericLeft = genericPool;
   for (let index = 0; index < 4; index += 1) {
     const equipType = index + 1;
     const requested = Math.max(0, plan.genericAllocation[index] || 0);
-    allocation[index] = Math.min(requested, genericLeft, (max[equipType] || 9) - specific[equipType]);
+    allocation[index] = Math.min(requested, genericLeft, max[equipType] - specific[equipType]);
     genericLeft -= allocation[index];
   }
-  const capacities = specific.map((count, equipType) => equipType === 0 ? count : Math.min(max[equipType] || 9, count + allocation[equipType - 1]));
+  const capacities = specific.map((count, equipType) => equipType === 0 ? count : Math.min(max[equipType], count + allocation[equipType - 1]));
   for (let equipType = 1; equipType < 5; equipType += 1) {
     let used = 0;
     for (const entry of plan.equipped) {
       const skill = skills.find((candidate) => candidate.id === entry.skillId);
       if (!skill || skill.equipType !== equipType) continue;
-      used += effectiveCost(skill, entry.mastered);
+      used += effectiveCost(skill, entry, legendaryBookRule);
       if (used <= capacities[equipType]) activeSkillIds.add(skill.id);
     }
   }
   return { capacities, specific, allocation, genericPool, genericLeft, activeSkillIds };
+}
+
+function normalizePlanLegendaryBookSlots(plan: Plan, skills: Skill[], rule: LegendaryBookGridCostRule) {
+  const usedByType = new Map<number, number>();
+  return {
+    ...plan,
+    equipped: plan.equipped.map((entry) => {
+      if (!entry.legendaryBookReduced) return { ...entry, legendaryBookReduced: false };
+      const skill = skills.find((candidate) => candidate.id === entry.skillId);
+      if (!skill || !rule.supportedSkillTypes.includes(skill.type)) return { ...entry, legendaryBookReduced: false };
+      const used = usedByType.get(skill.type) || 0;
+      if (used >= rule.perSkillTypeLimit) return { ...entry, legendaryBookReduced: false };
+      usedByType.set(skill.type, used + 1);
+      return { ...entry, mastered: false, legendaryBookReduced: true };
+    }),
+  };
 }
 
 function SkillSeal({ skill, small = false, icons }: { skill: Skill; small?: boolean; icons?: Record<string, string> }) {
@@ -284,6 +359,7 @@ function effectSearchText(effect: Effect) {
   const analysis = effect.analysis;
   return [
     effect.name,
+    effect.summary || "",
     effect.description,
     ...effect.short,
     ...effect.tags,
@@ -344,8 +420,15 @@ function validateDataset(value: unknown): Dataset {
   if (!Array.isArray(candidate.ui.maxSlotCounts) || candidate.ui.maxSlotCounts.length < 5) throw new Error("운공칸 정보가 없습니다.");
   const ids = new Set<number>();
   for (const skill of candidate.skills) {
-    if (!Number.isInteger(skill?.id) || ids.has(skill.id) || typeof skill.name !== "string" || skill.name.length > 80 || !skill.direct || !skill.reverse) throw new Error("무공 항목이 손상되었거나 중복되었습니다.");
+    if (!Number.isInteger(skill?.id) || !Number.isInteger(skill?.type) || ids.has(skill.id) || typeof skill.name !== "string" || skill.name.length > 80 || !skill.direct || !skill.reverse) throw new Error("무공 항목이 손상되었거나 중복되었습니다.");
     ids.add(skill.id);
+  }
+  if (candidate.dlc) {
+    const dlc = candidate.dlc;
+    if (![dlc.entries, dlc.carriers, dlc.chickenEffects, dlc.chickenFormations, dlc.specialSkillIds].every(Array.isArray)
+      || [...dlc.entries, ...dlc.carriers, ...dlc.chickenEffects, ...dlc.chickenFormations].some((item) => typeof item.description !== "string")
+      || dlc.specialSkillIds.some((id) => !ids.has(id))
+      || dlc.carriers.some((item) => !Array.isArray(item.codeConstants))) throw new Error("DLC 전투 안내 데이터가 손상되었습니다.");
   }
   return candidate as Dataset;
 }
@@ -357,6 +440,7 @@ export default function Planner() {
   const uploadRef = useRef<HTMLInputElement>(null);
   const buildImportRef = useRef<HTMLInputElement>(null);
   const [boardOpen, setBoardOpen] = useState(false);
+  const [dlcOpen, setDlcOpen] = useState(false);
   const [strategies, setStrategies] = useState<StrategyEntry[]>([]);
   const [boardLoading, setBoardLoading] = useState(false);
   const [strategyTitle, setStrategyTitle] = useState("");
@@ -403,9 +487,10 @@ export default function Planner() {
   const skills = dataset.skills;
   const meta = dataset.meta;
   const uiProfile = dataset.ui;
+  const legendaryBookRule = useMemo(() => legendaryBookGridCostRule(dataset), [dataset]);
   const plan = plans[activePlan] || blankPlan();
   const equipped = plan.equipped;
-  const layout = useMemo(() => computeLayout(plan, skills, uiProfile), [plan, skills, uiProfile]);
+  const layout = useMemo(() => computeLayout(plan, skills, uiProfile, legendaryBookRule), [plan, skills, uiProfile, legendaryBookRule]);
   const selected = skills.find((skill) => skill.id === selectedId) || skills[0];
   const activeEffect = effectFor(selected, mode);
   const selectedEquipped = equipped.find((entry) => entry.skillId === selected.id);
@@ -479,18 +564,36 @@ export default function Planner() {
       const existing = current.equipped.find((entry) => entry.skillId === skill.id);
       if (existing) return { ...current, equipped: current.equipped.map((entry) => entry.skillId === skill.id ? { ...entry, mode: targetMode } : entry) };
       const used = current.equipped.filter((entry) => skills.find((candidate) => candidate.id === entry.skillId)?.equipType === skill.equipType)
-        .reduce((sum, entry) => sum + effectiveCost(skills.find((candidate) => candidate.id === entry.skillId)!, entry.mastered), 0);
-      if (used + skill.gridCost > (uiProfile.maxSlotCounts[skill.equipType] || 9)) return current;
-      return { ...current, equipped: [...current.equipped, { skillId: skill.id, mode: targetMode, mastered: false }] };
+        .reduce((sum, entry) => sum + effectiveCost(skills.find((candidate) => candidate.id === entry.skillId)!, entry, legendaryBookRule), 0);
+      const maxSlots = normalizeMaxSlots(uiProfile.maxSlotCounts);
+      const equipTypeLimit = maxSlots[skill.equipType] || DEFAULT_MAX_SLOT_COUNT;
+      if (used + skill.gridCost > equipTypeLimit) return current;
+      return { ...current, equipped: [...current.equipped, { skillId: skill.id, mode: targetMode, mastered: false, legendaryBookReduced: false }] };
     });
   };
 
-  const toggleMastered = (skillId: number) => updatePlan((current) => ({ ...current, equipped: current.equipped.map((entry) => entry.skillId === skillId ? { ...entry, mastered: !entry.mastered } : entry) }));
+  const toggleMastered = (skillId: number) => updatePlan((current) => ({ ...current, equipped: current.equipped.map((entry) => entry.skillId === skillId ? { ...entry, mastered: !entry.mastered, legendaryBookReduced: false } : entry) }));
+  const toggleLegendaryBookReduction = (skillId: number) => updatePlan((current) => {
+    const target = skills.find((skill) => skill.id === skillId);
+    const selectedEntry = current.equipped.find((entry) => entry.skillId === skillId);
+    if (!target || !selectedEntry || !legendaryBookRule.supportedSkillTypes.includes(target.type)) return current;
+    const enabling = !selectedEntry.legendaryBookReduced;
+    return {
+      ...current,
+      equipped: current.equipped.map((entry) => {
+        if (entry.skillId === skillId) return { ...entry, mastered: false, legendaryBookReduced: enabling };
+        const candidate = skills.find((skill) => skill.id === entry.skillId);
+        if (enabling && candidate?.type === target.type) return { ...entry, legendaryBookReduced: false };
+        return entry;
+      }),
+    };
+  });
   const removeSkill = (skillId: number) => updatePlan((current) => ({ ...current, equipped: current.equipped.filter((entry) => entry.skillId !== skillId) }));
   const adjustGeneric = (equipType: number, delta: number) => updatePlan((current) => {
     const next = [...layout.allocation];
     const index = equipType - 1;
-    if (delta > 0 && (layout.genericLeft <= 0 || layout.capacities[equipType] >= (uiProfile.maxSlotCounts[equipType] || 9))) return current;
+    const maxSlots = normalizeMaxSlots(uiProfile.maxSlotCounts);
+    if (delta > 0 && (layout.genericLeft <= 0 || layout.capacities[equipType] >= maxSlots[equipType])) return current;
     if (delta < 0 && next[index] <= 0) return current;
     next[index] += delta;
     return { ...current, genericAllocation: next };
@@ -599,7 +702,7 @@ export default function Planner() {
     const safeVersion = datasetVersion.replace(/[\\/:*?"<>|\s]+/g, "-").slice(0, 40);
     link.href = url;
     link.download = `태오회권_운공안_${activePlan + 1}_${safeVersion}.json`;
-    document.body.append(link);
+    document.body.appendChild(link);
     link.click();
     link.remove();
     window.setTimeout(() => URL.revokeObjectURL(url), 0);
@@ -610,12 +713,16 @@ export default function Planner() {
     try {
       if (file.size > 1024 * 1024) throw new Error("운공안 파일이 1MB 제한을 넘었습니다.");
       const imported = readBuildFile(JSON.parse(await file.text()), new Set(skills.map((skill) => skill.id)));
-      const importedLayout = computeLayout(imported.plan as Plan, skills, uiProfile);
+      const importedPlan = normalizePlanLegendaryBookSlots(imported.plan as Plan, skills, legendaryBookRule);
+      const reducedBefore = (imported.plan as Plan).equipped.filter((entry) => entry.legendaryBookReduced).length;
+      const reducedAfter = importedPlan.equipped.filter((entry) => entry.legendaryBookReduced).length;
+      if (reducedAfter !== reducedBefore) throw new Error("같은 무학 유형에는 기서 수납 공법을 하나만 지정할 수 있습니다.");
+      const importedLayout = computeLayout(importedPlan, skills, uiProfile, legendaryBookRule);
       if (importedLayout.activeSkillIds.size !== imported.plan.equipped.length) throw new Error("현재 게임 규칙의 운공칸을 초과하는 배치입니다.");
-      updatePlan(() => imported.plan as Plan);
-      if (imported.plan.equipped.length) {
-        setSelectedId(imported.plan.equipped[0].skillId);
-        setMode(imported.plan.equipped[0].mode as Mode);
+      updatePlan(() => importedPlan);
+      if (importedPlan.equipped.length) {
+        setSelectedId(importedPlan.equipped[0].skillId);
+        setMode(importedPlan.equipped[0].mode as Mode);
       }
       const currentVersion = meta.datasetVersion || meta.gameVersion || meta.sourceHash.slice(0, 12);
       const mismatch = imported.datasetVersion !== currentVersion || imported.sourceHash !== meta.sourceHash;
@@ -640,9 +747,12 @@ export default function Planner() {
     setBoardLoading(true);
     try {
       const response = await fetch("/api/strategies", { cache: "no-store" });
-      const body = await response.json().catch(() => ({ error: "공략 게시판 API가 응답하지 않습니다." })) as { strategies?: StrategyEntry[]; error?: string };
+      const body = await response.json().catch(() => ({ error: "공략 게시판 API가 응답하지 않습니다." })) as { strategies?: StrategyWireEntry[]; error?: string };
       if (!response.ok) throw new Error(body.error || "공략을 불러오지 못했습니다.");
-      setStrategies(body.strategies || []);
+      setStrategies((body.strategies || []).map((entry) => {
+        const migrated = migrateStrategyPlan(entry.plan, Boolean(entry.planMigrated));
+        return { ...entry, ...migrated, plan: normalizePlanLegendaryBookSlots(migrated.plan, skills, legendaryBookRule) };
+      }));
       setBoardMessage("");
     } catch (error) {
       setBoardMessage(error instanceof Error ? error.message : "공략을 불러오지 못했습니다.");
@@ -676,7 +786,7 @@ export default function Planner() {
       const response = await fetch("/api/strategies", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ title: strategyTitle, content: strategyContent, password: strategyPassword, datasetVersion: meta.datasetVersion || meta.sourceHash.slice(0, 12), plan }),
+        body: JSON.stringify({ title: strategyTitle, content: strategyContent, password: strategyPassword, datasetVersion: meta.datasetVersion || meta.sourceHash.slice(0, 12), plan: { ...plan, schemaVersion: CURRENT_STRATEGY_PLAN_SCHEMA_VERSION } }),
       });
       const body = await response.json().catch(() => ({ error: "공략 게시판 API가 응답하지 않습니다." })) as { error?: string };
       if (!response.ok) throw new Error(body.error || "공략을 등록하지 못했습니다.");
@@ -700,6 +810,15 @@ export default function Planner() {
     setStrategyEditTitle(entry.title);
     setStrategyEditContent(entry.content || "");
     setStrategyEditPassword("");
+  };
+
+  const loadStrategyPlan = (entry: StrategyEntry) => {
+    const migrated = normalizePlanLegendaryBookSlots(entry.plan, skills, legendaryBookRule);
+    updatePlan(() => entry.planMigrated ? { ...migrated, maxSlots: plan.maxSlots } : migrated);
+    setDatasetMessage(entry.planMigrated
+      ? `구형 공략 「${entry.title}」을 현재 플래너 형식으로 변환했습니다. 최대 운공칸 설정은 유지됩니다.`
+      : `공략 「${entry.title}」을 현재 프리셋에 불러왔습니다.`);
+    closeBoard();
   };
 
   const saveStrategyEdit = async () => {
@@ -875,6 +994,7 @@ export default function Planner() {
           <span><Database size={14} /> 한국어 추출 {meta.skillCount}식</span>
           <span><GitCompareArrows size={14} /> 인과 관계식 {meta.analysisStats.semanticEdgeCount}</span>
           <span className="verified"><ShieldCheck size={14} /> 대상 검수</span>
+          {dataset.dlc && <button className="topbar-action" onClick={() => setDlcOpen(true)}><BookOpenText size={14} /> DLC 전투</button>}
           <input ref={uploadRef} className="sr-only" type="file" accept=".json,application/json" onChange={(event) => { const file = event.target.files?.[0]; if (file) void importDataset(file); event.currentTarget.value = ""; }} />
           <button className="topbar-action" onClick={() => uploadRef.current?.click()}><UploadCloud size={14} /> 데이터 업로드</button>
           <button className="topbar-action" onClick={openBoard}><Users size={14} /> 공략 게시판</button>
@@ -913,14 +1033,14 @@ export default function Planner() {
 
         <section className="board-panel panel">
           <div className="board-heading"><div><span className="eyebrow">운공 프리셋</span><h1>운공 배치</h1></div><div className="board-heading-actions"><div className="legend"><i className="direct-dot" />정련<i className="reverse-dot" />역련</div><input ref={buildImportRef} className="sr-only" type="file" accept=".json,application/json" onChange={(event) => { const file = event.target.files?.[0]; if (file) void importBuild(file); event.currentTarget.value = ""; }} /><button onClick={exportBuild} title="현재 프리셋 내보내기"><FileDown size={13} /> 내보내기</button><button onClick={() => buildImportRef.current?.click()} title="운공안 파일 가져오기"><FileUp size={13} /> 가져오기</button></div></div>
-          <div className="game-board-toolbar"><span className="toolbar-label">프리셋</span><div className="plan-tabs">{plans.map((_, index) => <button key={index} data-plan-index={index + 1} className={activePlan === index ? "active" : ""} onClick={() => setActivePlan(index)}>{index + 1}</button>)}</div><button className={`max-slot-toggle ${plan.maxSlots ? "active" : ""}`} onClick={() => updatePlan((current) => ({ ...current, maxSlots: !current.maxSlots }))}><Check size={12} /> 최대 운공칸</button><span className="max-slot-help">조건 없이 간단하게 최대 운공칸에 도달할 수 있습니다.</span><span className="generic-grid-note">{plan.maxSlots ? <b>계통별 게임 상한 적용</b> : <>만능공법칸 <b>{layout.genericLeft}/{layout.genericPool}</b></>}</span></div>
+          <div className="game-board-toolbar"><span className="toolbar-label">프리셋</span><div className="plan-tabs">{plans.map((_, index) => <button key={index} data-plan-index={index + 1} className={activePlan === index ? "active" : ""} onClick={() => setActivePlan(index)}>{index + 1}</button>)}</div><button className={`max-slot-toggle ${plan.maxSlots ? "active" : ""}`} onClick={() => updatePlan((current) => ({ ...current, maxSlots: !current.maxSlots }))}><Check size={12} /> 최대 운공칸</button><span className="max-slot-help">조건 없이 간단하게 최대 운공칸에 도달할 수 있습니다.</span><span className="generic-grid-note">{plan.maxSlots ? <b>계통별 플래너 상한 12칸</b> : <>만능공법칸 <b>{layout.genericLeft}/{layout.genericPool}</b></>}</span></div>
           <div className="cultivation-layout">
             <div className="loadout-board">
               {categoryNames.map((name, equipType) => {
                 const entries = equipped.filter((entry) => skills.find((skill) => skill.id === entry.skillId)?.equipType === equipType);
-                const used = entries.reduce((sum, entry) => sum + effectiveCost(skills.find((skill) => skill.id === entry.skillId)!, entry.mastered), 0);
+                const used = entries.reduce((sum, entry) => sum + effectiveCost(skills.find((skill) => skill.id === entry.skillId)!, entry, legendaryBookRule), 0);
                 const capacity = layout.capacities[equipType];
-                const maxCapacity = uiProfile.maxSlotCounts[equipType] || 9;
+                const maxCapacity = normalizeMaxSlots(uiProfile.maxSlotCounts)[equipType] || DEFAULT_MAX_SLOT_COUNT;
                 const logo = uiProfile.equipTypeLogos[equipType] ?? equipType;
                 return (
                   <div className={`loadout-lane lane-${equipType}`} style={{ "--capacity": maxCapacity } as React.CSSProperties} key={name} onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
@@ -937,18 +1057,18 @@ export default function Planner() {
                       <div className="equipped-cards">
                         {entries.map((entry) => {
                           const skill = skills.find((item) => item.id === entry.skillId)!;
-                          const cost = effectiveCost(skill, entry.mastered);
+                          const cost = effectiveCost(skill, entry, legendaryBookRule);
                           const active = layout.activeSkillIds.has(skill.id);
                           const art = `/game-ui/combatskillicon/sp_combatskillback_${cardArtNames[equipType]}_${skill.gradeIndex ?? Math.max(0, 9 - skill.grade)}.png`;
                           return (
-                            <div key={skill.id} data-equipped-skill-name={skill.name} style={{ "--span": cost, "--card-art": `url(${art})` } as React.CSSProperties} className={`equipped-card ${entry.mode} ${active ? "" : "invalid"}`} role="button" tabIndex={0} aria-label={`${skill.name}, ${entry.mode === "direct" ? "정련" : "역련"}, ${cost}칸`} title={`${skill.name} · ${entry.mode === "direct" ? "정련" : "역련"} · ${entry.mastered ? "정해 · " : ""}${cost}칸${active ? "" : " · 운공 실패"}`} onClick={() => { setSelectedId(skill.id); setMode(entry.mode); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSelectedId(skill.id); setMode(entry.mode); } }}>
-                              <span className="equipped-card-main"><SkillSeal skill={skill} icons={dataset.assets?.combatSkillIcons} /><span className="equipped-card-copy"><small className={entry.mode}>{entry.mode === "direct" ? "正" : "逆"} · {entry.mastered ? "정해 · " : ""}{cost}칸{active ? "" : " · 실패"}</small><strong className={`equipped-card-name ${gradeClass(skill)}`}>{skill.name}</strong></span></span>
-                              <button className={`mastery-mini ${entry.mastered ? "active" : ""}`} title="정해: 점유 1칸 감소, 발휘 요구 증가" onClick={(event) => { event.stopPropagation(); toggleMastered(skill.id); }}>精</button>
+                            <div key={skill.id} data-equipped-skill-name={skill.name} style={{ "--span": cost, "--card-art": `url(${art})` } as React.CSSProperties} className={`equipped-card ${entry.mode} ${active ? "" : "invalid"}`} role="button" tabIndex={0} aria-label={`${skill.name}, ${entry.mode === "direct" ? "정련" : "역련"}, ${cost}칸`} title={`${skill.name} · ${entry.mode === "direct" ? "정련" : "역련"} · ${entry.legendaryBookReduced ? "기서 수납 · " : entry.mastered ? "정해 · " : ""}${cost}칸${active ? "" : " · 운공 실패"}`} onClick={() => { setSelectedId(skill.id); setMode(entry.mode); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSelectedId(skill.id); setMode(entry.mode); } }}>
+                              <span className="equipped-card-main"><SkillSeal skill={skill} icons={dataset.assets?.combatSkillIcons} /><span className="equipped-card-copy"><small className={entry.mode}>{entry.mode === "direct" ? "正" : "逆"} · {entry.legendaryBookReduced ? "기서 · " : entry.mastered ? "정해 · " : ""}{cost}칸{active ? "" : " · 실패"}</small><strong className={`equipped-card-name ${gradeClass(skill)}`}>{skill.name}</strong></span></span>
+                              <button className={`mastery-mini ${entry.mastered || entry.legendaryBookReduced ? "active" : ""} ${entry.legendaryBookReduced ? "legendary" : ""}`} title={entry.legendaryBookReduced ? "기서 수납 해제" : "정해: 점유 1칸 감소, 발휘 요구 증가"} onClick={(event) => { event.stopPropagation(); if (entry.legendaryBookReduced) toggleLegendaryBookReduction(skill.id); else toggleMastered(skill.id); }}>{entry.legendaryBookReduced ? "奇" : "精"}</button>
                               <button className="remove-skill" aria-label={`${skill.name} 제거`} onClick={(event) => { event.stopPropagation(); removeSkill(skill.id); }}><Minus size={12} /></button>
                             </div>
                           );
                         })}
-                        {used < maxCapacity && <span className="empty-hint"><Plus size={14} /> 공법을 끌어놓기</span>}
+                        {used < capacity && <span className="empty-hint"><Plus size={14} /> 공법을 끌어놓기</span>}
                       </div>
                     </div>
                   </div>
@@ -956,17 +1076,22 @@ export default function Planner() {
               })}
             </div>
           </div>
-          <div className="board-footnote"><Check size={14} /> 기본 {uiProfile.initialSlotCounts.slice(0, 5).join("·")}칸 + 내공 제공칸 + 만능칸 배분, 계통별 최대 9칸과 정해 비용을 게임 코드 그대로 계산합니다.</div>
+          <div className="board-footnote"><Check size={14} /> 기본 {uiProfile.initialSlotCounts.slice(0, 5).join("·")}칸 + 내공 제공칸 + 만능칸 배분, 계통별 플래너 상한 12칸과 정해·기서 수납 비용을 계산합니다.</div>
         </section>
 
         <aside className="analysis-panel panel">
           <div className="analysis-summary" data-primary-skill-id={selected.id}>
             <div className="selected-header"><SkillSeal skill={selected} icons={dataset.assets?.combatSkillIcons} /><div><span>{selected.sectName} · {selected.grade}품 · {selected.typeName}</span><h2 className={gradeClass(selected)}>{selected.name}</h2><small>{selected.equipName} {selected.gridCost}칸</small></div></div>
             <div className="mode-switch" role="tablist" aria-label="수련 방식"><button className={mode === "direct" ? "active direct" : ""} onClick={() => setMode("direct")}><span>正</span> 정련</button><button className={mode === "reverse" ? "active reverse" : ""} onClick={() => setMode("reverse")}><span>逆</span> 역련</button></div>
-            {selectedEquipped && <button className={`mastery-toggle ${selectedEquipped.mastered ? "active" : ""}`} onClick={() => toggleMastered(selected.id)}><b>精解 · 정해</b><span>{selectedEquipped.mastered ? `${selected.gridCost}→${selected.masteredGridCost}칸 · 발휘 요구 증가 적용 중` : "점유 1칸 감소 · 발휘 요구 대폭 증가"}</span></button>}
+            {selectedEquipped && <div className="cost-option-list">
+              <button className={`mastery-toggle ${selectedEquipped.mastered ? "active" : ""}`} onClick={() => toggleMastered(selected.id)}><b>精解 · 정해</b><span>{selectedEquipped.mastered ? `${selected.gridCost}→${selected.masteredGridCost}칸 · 발휘 요구 증가 적용 중` : "점유 1칸 감소 · 발휘 요구 대폭 증가"}</span></button>
+              <button className={`mastery-toggle legendary-toggle ${selectedEquipped.legendaryBookReduced ? "active" : ""}`} onClick={() => toggleLegendaryBookReduction(selected.id)}><b>奇書 · 기서 수납</b><span>{selectedEquipped.legendaryBookReduced ? `${selected.gridCost}→${Math.min(selected.gridCost, legendaryBookRule.targetCost)}칸 · 발휘 요구 +${legendaryBookRule.requirementPercent}% 적용 중` : `${selected.typeName} 중 1개를 ${legendaryBookRule.targetCost}칸으로 고정 · 정해와 중복 불가`}</span></button>
+            </div>}
             <div className="effect-card">
               <div className="effect-title"><Sparkles size={15} /><strong>{activeEffect.short[0] || activeEffect.name}</strong>{selected.codeVerified && <span><ShieldCheck size={12} /> 코드 검증</span>}</div>
+              {activeEffect.summary && activeEffect.summary !== activeEffect.description && <p className="effect-summary-copy">{activeEffect.summary}</p>}
               <p>{activeEffect.description || "이 수련 방식에는 별도 특수 효과 설명이 없습니다."}</p>
+              {activeEffect.analysis.banControl?.immunityCondition && <p className="effect-summary-copy">봉금 면역 조건: {activeEffect.analysis.banControl.immunityCondition}</p>}
               <div className="tag-list">{displayFacets.map((tag) => <span key={tag}>#{tag}</span>)}</div>
               <details className="logic-summary"><summary className="logic-heading"><GitCompareArrows size={14} /><strong>대상·효과 방향 근거</strong><span>{activeEffect.analysis.logic.coverage.conditionCount}조건 · {activeEffect.analysis.logic.coverage.operationCount}동작</span></summary><div className="logic-flow">{logicEvents.map((event) => <span className="logic-event" key={event}>발동 · {event}</span>)}{logicConditions.map((condition, index) => <span className="logic-condition" key={`${condition.expression}-${index}`} title={condition.expression}>조건 · {[...condition.resources, ...condition.states].slice(0, 2).join(" · ") || condition.target}</span>)}{logicOperations.map((operation, index) => <span className={`logic-operation verb-${operation.verb}`} key={`${operation.symbol}-${index}`} title={operation.evidence}>{operation.target} · {operation.resources.filter((resource) => resource !== "전투 상태").slice(0, 2).join(" · ")} {logicVerbNames[operation.verb] || "변경"}</span>)}</div></details>
             </div>
@@ -1019,6 +1144,7 @@ export default function Planner() {
           </section>
           <div className="effect-card relation-preview-effect">
             <div className="effect-title"><Sparkles size={15} /><strong>{relationPreviewEffect.short[0] || relationPreviewEffect.name}</strong>{relationPreviewSkill.codeVerified && <span><ShieldCheck size={12} /> 코드 검증</span>}</div>
+            {relationPreviewEffect.summary && relationPreviewEffect.summary !== relationPreviewEffect.description && <p className="effect-summary-copy">{relationPreviewEffect.summary}</p>}
             <p>{relationPreviewEffect.description || "이 수련 방식에는 별도 특수 효과 설명이 없습니다."}</p>
             <div className="tag-list">{relationPreviewFacets.map((tag) => <span key={tag}>#{tag}</span>)}</div>
           </div>
@@ -1045,8 +1171,8 @@ export default function Planner() {
               const versionMismatch = entry.datasetVersion !== (meta.datasetVersion || meta.sourceHash.slice(0, 12));
               return <article key={entry.id} className="strategy-card" data-strategy-id={entry.id}>
                 <span className="strategy-rank">{index + 1}</span>
-                <div className="strategy-copy"><strong>{entry.title}</strong><span>{names.join(" · ") || "빈 조합"}</span><small className={versionMismatch ? "mismatch" : ""}>{entry.datasetVersion}{versionMismatch ? ` · 다른 버전${missing ? ` · 누락 ${missing}식` : ""}` : " · 현재 버전"} · {entry.content ? "본문 있음" : "기존 글"}</small></div>
-                <div className="strategy-card-actions"><button className="view-strategy" onClick={() => openStrategyDetail(entry)}><Eye size={12} /> 본문 보기</button><button className="load-strategy" disabled={Boolean(missing)} onClick={() => { updatePlan(() => ({ ...entry.plan, maxSlots: Boolean(entry.plan.maxSlots) })); closeBoard(); }}>불러오기</button></div>
+                <div className="strategy-copy"><strong>{entry.title}</strong><span>{names.join(" · ") || "빈 조합"}</span><small className={versionMismatch ? "mismatch" : ""}>{entry.datasetVersion}{versionMismatch ? ` · 다른 버전${missing ? ` · 누락 ${missing}식` : ""}` : " · 현재 버전"} · {entry.planMigrated ? "최신 형식 자동 변환" : entry.content ? "본문 있음" : "기존 글"}</small></div>
+                <div className="strategy-card-actions"><button className="view-strategy" onClick={() => openStrategyDetail(entry)}><Eye size={12} /> 본문 보기</button><button className="load-strategy" disabled={Boolean(missing)} onClick={() => loadStrategyPlan(entry)}>불러오기</button></div>
                 <button className="vote-button" onClick={() => void voteStrategy(entry.id)}><ThumbsUp size={14} /><b>{entry.votes}</b></button>
               </article>;
             }) : <div className="strategy-empty"><BookOpenText size={28} /><strong>첫 공략을 등록해 보세요</strong><span>현재 프리셋, 공략 본문, 데이터 버전이 함께 저장됩니다.</span></div>}
@@ -1092,6 +1218,7 @@ export default function Planner() {
         </div>}
       </aside>}
 
+      {dlcOpen && dataset.dlc && <DlcGuide data={dataset.dlc} skills={skills} version={meta.gameVersion || meta.datasetVersion || "버전 미상"} onClose={() => setDlcOpen(false)} onSelect={(id) => { setSelectedId(id); setMode("direct"); }} />}
       {reportBoardOpen && <div className="board-overlay" role="dialog" aria-modal="true" aria-label="시너지와 카운터 관계 제보 게시판">
         <div className="relation-board">
           <header><div><span className="eyebrow">유저 근거 제보</span><h2>시너지·카운터 제보 게시판</h2></div><button className="icon-button" onClick={() => setReportBoardOpen(false)} aria-label="관계 제보 게시판 닫기"><X size={16} /></button></header>
